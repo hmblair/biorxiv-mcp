@@ -132,11 +132,15 @@ def search(
     category: str | None = None,
     after: str | None = None,
     before: str | None = None,
+    detail: bool = False,
 ) -> list[dict]:
     """FTS5 search with optional filters."""
     fts_query = _add_prefix_matching(query)
-    sql = """
-        SELECT p.*
+    columns = "p.doi, p.title, p.authors, p.date, p.category, p.server"
+    if detail:
+        columns = "p.*"
+    sql = f"""
+        SELECT {columns}
         FROM papers_fts f
         JOIN papers p ON p.rowid = f.rowid
         WHERE papers_fts MATCH ?
@@ -188,6 +192,14 @@ def clear_bulk_sync_cursor(conn: sqlite3.Connection) -> None:
 
 def get_paper_count(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+
+
+def get_categories(conn: sqlite3.Connection) -> list[dict]:
+    """Return all categories with paper counts, sorted by count descending."""
+    rows = conn.execute(
+        "SELECT category, COUNT(*) as count FROM papers GROUP BY category ORDER BY count DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_db_size_mb() -> float:

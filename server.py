@@ -16,28 +16,43 @@ def search_biorxiv(
     category: str | None = None,
     after: str | None = None,
     before: str | None = None,
+    detail: bool = False,
 ) -> list[dict]:
     """Search bioRxiv/medRxiv papers by keyword.
 
     Uses full-text search on titles, abstracts, and authors.
+    Returns compact results (doi, title, authors, date, category) by default.
+    Set detail=True to include abstract, institution, license, and other fields.
 
     Args:
-        query: Search query (FTS5 syntax supported, e.g. "CRISPR AND cancer")
+        query: Search query (supports prefix matching and FTS5 syntax, e.g. "CRISPR AND cancer")
         limit: Max results to return (default 10)
-        category: Filter by category (e.g. "neuroscience", "genomics")
+        category: Filter by category (e.g. "neuroscience", "genomics"). Use biorxiv_categories() to list available categories.
         after: Only papers on or after this date (YYYY-MM-DD)
         before: Only papers on or before this date (YYYY-MM-DD)
+        detail: If True, return all fields including abstract (default False)
     """
     conn = db.get_connection()
     try:
         db.init_db(conn)
-        results = db.search(conn, query, limit=limit, category=category, after=after, before=before)
+        results = db.search(conn, query, limit=limit, category=category, after=after, before=before, detail=detail)
         if not results:
             count = db.get_paper_count(conn)
             if count == 0:
                 return [{"message": "Database is empty. Run sync_biorxiv() first to populate it."}]
             return [{"message": f"No results for '{query}' (searched {count} papers)."}]
         return results
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def biorxiv_categories() -> list[dict]:
+    """List all bioRxiv/medRxiv categories with paper counts."""
+    conn = db.get_connection()
+    try:
+        db.init_db(conn)
+        return db.get_categories(conn)
     finally:
         conn.close()
 
