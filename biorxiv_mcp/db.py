@@ -1,0 +1,171 @@
+"""SQLite FTS5 index for bioRxiv papers."""
+
+import os
+import sqlite3
+from pathlib import Path
+
+DB_DIR = Path(os.environ.get("BIORXIV_MCP_DATA", Path.home() / ".local/share/biorxiv-mcp"))
+DB_PATH = DB_DIR / "biorxiv.db"
+
+
+def get_connection() -> sqlite3.Connection:
+    DB_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+def init_db(conn: sqlite3.Connection) -> None:
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS papers (
+            doi TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            authors TEXT,
+            abstract TEXT,
+            date TEXT,
+            category TEXT,
+            version TEXT,
+            type TEXT,
+            license TEXT,
+            published TEXT,
+            author_corresponding TEXT,
+            author_corresponding_institution TEXT,
+            jatsxml TEXT,
+            server TEXT
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
+            title, abstract, authors, author_corresponding_institution,
+            content='papers',
+            content_rowid='rowid'
+        );
+
+        -- Triggers to keep FTS in sync
+        CREATE TRIGGER IF NOT EXISTS papers_ai AFTER INSERT ON papers BEGIN
+            INSERT INTO papers_fts(rowid, title, abstract, authors, author_corresponding_institution)
+            VALUES (new.rowid, new.title, new.abstract, new.authors, new.author_corresponding_institution);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS papers_ad AFTER DELETE ON papers BEGIN
+            INSERT INTO papers_fts(papers_fts, rowid, title, abstract, authors, author_corresponding_institution)
+            VALUES ('delete', old.rowid, old.title, old.abstract, old.authors, old.author_corresponding_institution);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS papers_au AFTER UPDATE ON papers BEGIN
+            INSERT INTO papers_fts(papers_fts, rowid, title, abstract, authors, author_corresponding_institution)
+            VALUES ('delete', old.rowid, old.title, old.abstract, old.authors, old.author_corresponding_institution);
+            INSERT INTO papers_fts(rowid, title, abstract, authors, author_corresponding_institution)
+            VALUES (new.rowid, new.title, new.abstract, new.authors, new.author_corresponding_institution);
+        END;
+
+        CREATE TABLE IF NOT EXISTS sync_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
+    """)
+
+
+def upsert_papers(conn: sqlite3.Connection, papers: list[dict]) -> int:
+    """Insert or replace papers. Returns number of papers upserted."""
+    if not papers:
+        return 0
+    # Deduplicate by DOI within the batch, keeping the highest version
+    by_doi: dict[str, dict] = {}
+    for p in papers:
+        existing = by_doi.get(p["doi"])
+        if existing is None:
+            by_doi[p["doi"]] = p
+        else:
+            try:
+                new_ver = int(p.get("version", "0"))
+                old_ver = int(existing.get("version", "0"))
+                if new_ver > old_ver:
+                    by_doi[p["doi"]] = p
+            except ValueError:
+                by_doi[p["doi"]] = p
+    papers = list(by_doi.values())
+    dois = [(p["doi"],) for p in papers]
+    conn.executemany("DELETE FROM papers WHERE doi = ?", dois)
+    conn.executemany(
+        """INSERT INTO papers (doi, title, authors, abstract, date, category, version,
+                               type, license, published, author_corresponding,
+                               author_corresponding_institution, jatsxml, server)
+           VALUES (:doi, :title, :authors, :abstract, :date, :category, :version,
+                   :type, :license, :published, :author_corresponding,
+                   :author_corresponding_institution, :jatsxml, :server)""",
+        papers,
+    )
+    conn.commit()
+    return len(papers)
+
+
+def search(
+    conn: sqlite3.Connection,
+    query: str,
+    limit: int = 10,
+    category: str | None = None,
+    after: str | None = None,
+    before: str | None = None,
+) -> list[dict]:
+    """FTS5 search with optional filters."""
+    sql = """
+        SELECT p.*
+        FROM papers_fts f
+        JOIN papers p ON p.rowid = f.rowid
+        WHERE papers_fts MATCH ?
+    """
+    params: list = [query]
+    if category:
+        sql += " AND p.category = ?"
+        params.append(category)
+    if after:
+        sql += " AND p.date >= ?"
+        params.append(after)
+    if before:
+        sql += " AND p.date <= ?"
+        params.append(before)
+    sql += " ORDER BY rank LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_last_sync_date(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute("SELECT value FROM sync_meta WHERE key = 'last_sync_date'").fetchone()
+    return row["value"] if row else None
+
+
+def set_last_sync_date(conn: sqlite3.Connection, date: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('last_sync_date', ?)", (date,)
+    )
+    conn.commit()
+
+
+def get_bulk_sync_cursor(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute("SELECT value FROM sync_meta WHERE key = 'bulk_sync_cursor'").fetchone()
+    return row["value"] if row else None
+
+
+def set_bulk_sync_cursor(conn: sqlite3.Connection, date: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('bulk_sync_cursor', ?)", (date,)
+    )
+    conn.commit()
+
+
+def clear_bulk_sync_cursor(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM sync_meta WHERE key = 'bulk_sync_cursor'")
+    conn.commit()
+
+
+def get_paper_count(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+
+
+def get_db_size_mb() -> float:
+    if DB_PATH.exists():
+        return DB_PATH.stat().st_size / (1024 * 1024)
+    return 0.0
