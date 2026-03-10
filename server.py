@@ -21,6 +21,7 @@ def search_biorxiv(
     after: str | None = None,
     before: str | None = None,
     detail: bool = False,
+    sort: str = "relevance",
 ) -> list[dict]:
     """Search bioRxiv/medRxiv papers by keyword.
 
@@ -35,11 +36,12 @@ def search_biorxiv(
         after: Only papers on or after this date (YYYY-MM-DD)
         before: Only papers on or before this date (YYYY-MM-DD)
         detail: If True, return all fields including abstract (default False)
+        sort: "relevance" (default) or "date" (newest first)
     """
     conn = db.get_connection()
     try:
         db.init_db(conn)
-        results = db.search(conn, query, limit=limit, category=category, after=after, before=before, detail=detail)
+        results = db.search(conn, query, limit=limit, category=category, after=after, before=before, detail=detail, sort=sort)
         if not results:
             count = db.get_paper_count(conn)
             if count == 0:
@@ -133,9 +135,27 @@ def biorxiv_status() -> dict:
         conn.close()
 
 
+def _fetch_paper_from_api(doi: str) -> dict | None:
+    """Fetch paper metadata from bioRxiv API by DOI."""
+    with httpx.Client(timeout=30) as client:
+        for server in ("biorxiv", "medrxiv"):
+            try:
+                resp = client.get(f"https://api.biorxiv.org/details/{server}/{doi}")
+                data = resp.json()
+                if data.get("collection"):
+                    from biorxiv_mcp.sync import _normalize_paper
+                    return _normalize_paper(data["collection"][-1], server)
+            except httpx.HTTPError:
+                continue
+    return None
+
+
 @mcp.tool()
 def get_paper(doi: str) -> dict:
     """Get detailed information for a paper by DOI.
+
+    Checks the local database first, then falls back to the bioRxiv API
+    for papers that haven't been synced yet.
 
     Args:
         doi: The paper DOI (e.g. "10.1101/2024.01.05.574328")
@@ -144,11 +164,16 @@ def get_paper(doi: str) -> dict:
     try:
         db.init_db(conn)
         paper = db.get_paper(conn, doi)
-        if not paper:
-            return {"error": f"DOI {doi} not found in local database."}
-        return paper
+        if paper:
+            return paper
     finally:
         conn.close()
+
+    paper = _fetch_paper_from_api(doi)
+    if paper:
+        paper["_source"] = "api"
+        return paper
+    return {"error": f"DOI {doi} not found in local database or bioRxiv API."}
 
 
 @mcp.tool()

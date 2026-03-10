@@ -168,18 +168,20 @@ def search(
     after: str | None = None,
     before: str | None = None,
     detail: bool = False,
+    sort: str = "relevance",
 ) -> list[dict]:
     """FTS5 search with optional filters."""
     where, params = _search_where(query, category, after, before)
     columns = "p.doi, p.title, p.authors, p.date, p.category, p.server"
     if detail:
         columns = "p.*"
+    order = "rank" if sort == "relevance" else "p.date DESC"
     sql = f"""
         SELECT {columns}
         FROM papers_fts f
         JOIN papers p ON p.rowid = f.rowid
         WHERE {where}
-        ORDER BY rank LIMIT ?
+        ORDER BY {order} LIMIT ?
     """
     params.append(limit)
     rows = conn.execute(sql, params).fetchall()
