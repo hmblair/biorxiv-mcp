@@ -1,10 +1,14 @@
 """bioRxiv MCP server -- search and sync bioRxiv/medRxiv papers."""
 
 import asyncio
+from pathlib import Path
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 
 from biorxiv_mcp import db, sync
+
+DOWNLOAD_DIR = Path.home() / ".local/share/biorxiv-mcp/papers"
 
 mcp = FastMCP("biorxiv")
 
@@ -127,6 +131,80 @@ def biorxiv_status() -> dict:
         }
     finally:
         conn.close()
+
+
+@mcp.tool()
+def get_paper(doi: str) -> dict:
+    """Get detailed information for a paper by DOI.
+
+    Args:
+        doi: The paper DOI (e.g. "10.1101/2024.01.05.574328")
+    """
+    conn = db.get_connection()
+    try:
+        db.init_db(conn)
+        paper = db.get_paper(conn, doi)
+        if not paper:
+            return {"error": f"DOI {doi} not found in local database."}
+        return paper
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def download_paper(doi: str) -> dict:
+    """Download a bioRxiv/medRxiv paper PDF by DOI.
+
+    Saves to ~/.local/share/biorxiv-mcp/papers/{doi}.pdf
+
+    Args:
+        doi: The paper DOI (e.g. "10.1101/2024.01.05.574328")
+    """
+    conn = db.get_connection()
+    try:
+        db.init_db(conn)
+        paper = db.get_paper(conn, doi)
+    finally:
+        conn.close()
+
+    if not paper:
+        # Try fetching metadata from API directly
+        server = "biorxiv"
+    else:
+        server = paper.get("server", "biorxiv")
+
+    # Resolve version and PDF URL
+    try:
+        with httpx.Client(follow_redirects=True, timeout=60.0) as client:
+            if not paper:
+                # Fetch from API to get version info
+                for srv in ("biorxiv", "medrxiv"):
+                    resp = client.get(f"https://api.biorxiv.org/details/{srv}/{doi}")
+                    data = resp.json()
+                    if data.get("collection"):
+                        server = srv
+                        version = data["collection"][-1].get("version", "1")
+                        break
+                else:
+                    return {"error": f"DOI {doi} not found on bioRxiv/medRxiv."}
+            else:
+                version = paper.get("version", "1")
+
+            pdf_url = f"https://www.{server}.org/content/{doi}v{version}.full.pdf"
+            resp = client.get(pdf_url)
+            resp.raise_for_status()
+
+            if not resp.content.startswith(b"%PDF"):
+                return {"error": f"Response from {pdf_url} was not a PDF."}
+
+            DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            safe_doi = doi.replace("/", "_")
+            output = DOWNLOAD_DIR / f"{safe_doi}.pdf"
+            output.write_bytes(resp.content)
+            return {"path": str(output), "size_mb": round(len(resp.content) / (1024 * 1024), 2)}
+
+    except httpx.HTTPError as e:
+        return {"error": f"Download failed: {e}"}
 
 
 if __name__ == "__main__":

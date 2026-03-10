@@ -219,6 +219,12 @@ def get_paper_count(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
 
 
+def get_paper(conn: sqlite3.Connection, doi: str) -> dict | None:
+    """Get a paper by DOI."""
+    row = conn.execute("SELECT * FROM papers WHERE doi = ?", (doi,)).fetchone()
+    return dict(row) if row else None
+
+
 def get_categories(conn: sqlite3.Connection) -> list[dict]:
     """Return all categories with paper counts, sorted by count descending."""
     rows = conn.execute(
