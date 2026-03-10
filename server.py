@@ -1,14 +1,11 @@
 """bioRxiv MCP server -- search and sync bioRxiv/medRxiv papers."""
 
 import asyncio
-from pathlib import Path
 
 import httpx
 from mcp.server.fastmcp import FastMCP
 
 from biorxiv_mcp import db, sync
-
-DOWNLOAD_DIR = Path.home() / ".local/share/biorxiv-mcp/papers"
 
 mcp = FastMCP("biorxiv")
 
@@ -40,7 +37,6 @@ def search_biorxiv(
     """
     conn = db.get_connection()
     try:
-        db.init_db(conn)
         results = db.search(conn, query, limit=limit, category=category, after=after, before=before, detail=detail, sort=sort)
         if not results:
             count = db.get_paper_count(conn)
@@ -71,7 +67,6 @@ def search_biorxiv_count(
     """
     conn = db.get_connection()
     try:
-        db.init_db(conn)
         count = db.search_count(conn, query, category=category, after=after, before=before)
         return {"query": query, "count": count}
     finally:
@@ -83,7 +78,6 @@ def biorxiv_categories() -> list[dict]:
     """List all bioRxiv/medRxiv categories with paper counts."""
     conn = db.get_connection()
     try:
-        db.init_db(conn)
         return db.get_categories(conn)
     finally:
         conn.close()
@@ -98,7 +92,6 @@ async def sync_biorxiv() -> dict:
     """
     conn = db.get_connection()
     try:
-        db.init_db(conn)
         last = db.get_last_sync_date(conn)
         if last:
             count = await sync.delta_sync(conn)
@@ -124,7 +117,6 @@ def biorxiv_status() -> dict:
     """Get the status of the local bioRxiv database."""
     conn = db.get_connection()
     try:
-        db.init_db(conn)
         return {
             "paper_count": db.get_paper_count(conn),
             "last_sync": db.get_last_sync_date(conn),
@@ -133,21 +125,6 @@ def biorxiv_status() -> dict:
         }
     finally:
         conn.close()
-
-
-def _fetch_paper_from_api(doi: str) -> dict | None:
-    """Fetch paper metadata from bioRxiv API by DOI."""
-    with httpx.Client(timeout=30) as client:
-        for server in ("biorxiv", "medrxiv"):
-            try:
-                resp = client.get(f"https://api.biorxiv.org/details/{server}/{doi}")
-                data = resp.json()
-                if data.get("collection"):
-                    from biorxiv_mcp.sync import _normalize_paper
-                    return _normalize_paper(data["collection"][-1], server)
-            except httpx.HTTPError:
-                continue
-    return None
 
 
 @mcp.tool()
@@ -162,14 +139,13 @@ def get_paper(doi: str) -> dict:
     """
     conn = db.get_connection()
     try:
-        db.init_db(conn)
         paper = db.get_paper(conn, doi)
         if paper:
             return paper
     finally:
         conn.close()
 
-    paper = _fetch_paper_from_api(doi)
+    paper = sync.fetch_paper_by_doi(doi)
     if paper:
         paper["_source"] = "api"
         return paper
@@ -185,46 +161,34 @@ def download_paper(doi: str) -> dict:
     Args:
         doi: The paper DOI (e.g. "10.1101/2024.01.05.574328")
     """
+    # Get paper metadata (local DB or API) to determine server and version.
     conn = db.get_connection()
     try:
-        db.init_db(conn)
         paper = db.get_paper(conn, doi)
     finally:
         conn.close()
 
     if not paper:
-        # Try fetching metadata from API directly
-        server = "biorxiv"
-    else:
-        server = paper.get("server", "biorxiv")
+        paper = sync.fetch_paper_by_doi(doi)
+    if not paper:
+        return {"error": f"DOI {doi} not found on bioRxiv/medRxiv."}
 
-    # Resolve version and PDF URL
+    server = paper.get("server", "biorxiv")
+    version = paper.get("version", "1")
+    pdf_url = f"https://www.{server}.org/content/{doi}v{version}.full.pdf"
+
     try:
         with httpx.Client(follow_redirects=True, timeout=60.0) as client:
-            if not paper:
-                # Fetch from API to get version info
-                for srv in ("biorxiv", "medrxiv"):
-                    resp = client.get(f"https://api.biorxiv.org/details/{srv}/{doi}")
-                    data = resp.json()
-                    if data.get("collection"):
-                        server = srv
-                        version = data["collection"][-1].get("version", "1")
-                        break
-                else:
-                    return {"error": f"DOI {doi} not found on bioRxiv/medRxiv."}
-            else:
-                version = paper.get("version", "1")
-
-            pdf_url = f"https://www.{server}.org/content/{doi}v{version}.full.pdf"
             resp = client.get(pdf_url)
             resp.raise_for_status()
 
             if not resp.content.startswith(b"%PDF"):
                 return {"error": f"Response from {pdf_url} was not a PDF."}
 
-            DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            download_dir = db.DB_DIR / "papers"
+            download_dir.mkdir(parents=True, exist_ok=True)
             safe_doi = doi.replace("/", "_")
-            output = DOWNLOAD_DIR / f"{safe_doi}.pdf"
+            output = download_dir / f"{safe_doi}.pdf"
             output.write_bytes(resp.content)
             return {"path": str(output), "size_mb": round(len(resp.content) / (1024 * 1024), 2)}
 

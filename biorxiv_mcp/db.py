@@ -7,6 +7,25 @@ from pathlib import Path
 DB_DIR = Path(os.environ.get("BIORXIV_MCP_DATA", Path.home() / ".local/share/biorxiv-mcp"))
 DB_PATH = DB_DIR / "biorxiv.db"
 
+# Authoritative list of paper fields, in schema order.
+# sync.py and upsert_papers derive column names from this.
+PAPER_FIELDS = (
+    "doi", "title", "authors", "abstract", "date", "category", "version",
+    "type", "license", "published", "author_corresponding",
+    "author_corresponding_institution", "jatsxml", "server",
+)
+
+# Fields included in FTS index (must be a subset of PAPER_FIELDS).
+FTS_FIELDS = ("title", "abstract", "authors", "author_corresponding_institution")
+
+_INSERT_COLS = ", ".join(PAPER_FIELDS)
+_INSERT_PARAMS = ", ".join(f":{f}" for f in PAPER_FIELDS)
+_FTS_COLS = ", ".join(FTS_FIELDS)
+_FTS_NEW = ", ".join(f"new.{f}" for f in FTS_FIELDS)
+_FTS_OLD = ", ".join(f"old.{f}" for f in FTS_FIELDS)
+
+_initialized: set[int] = set()
+
 
 def get_connection() -> sqlite3.Connection:
     DB_DIR.mkdir(parents=True, exist_ok=True)
@@ -14,50 +33,47 @@ def get_connection() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    init_db(conn)
     return conn
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    conn.executescript("""
+    # Avoid re-running DDL on the same connection.
+    conn_id = id(conn)
+    if conn_id in _initialized:
+        return
+    cols = ",\n            ".join(
+        f"{f} TEXT PRIMARY KEY" if f == "doi"
+        else f"{f} TEXT NOT NULL" if f == "title"
+        else f"{f} TEXT"
+        for f in PAPER_FIELDS
+    )
+    conn.executescript(f"""
         CREATE TABLE IF NOT EXISTS papers (
-            doi TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            authors TEXT,
-            abstract TEXT,
-            date TEXT,
-            category TEXT,
-            version TEXT,
-            type TEXT,
-            license TEXT,
-            published TEXT,
-            author_corresponding TEXT,
-            author_corresponding_institution TEXT,
-            jatsxml TEXT,
-            server TEXT
+            {cols}
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
-            title, abstract, authors, author_corresponding_institution,
+            {_FTS_COLS},
             content='papers',
             content_rowid='rowid'
         );
 
-        -- Triggers to keep FTS in sync
         CREATE TRIGGER IF NOT EXISTS papers_ai AFTER INSERT ON papers BEGIN
-            INSERT INTO papers_fts(rowid, title, abstract, authors, author_corresponding_institution)
-            VALUES (new.rowid, new.title, new.abstract, new.authors, new.author_corresponding_institution);
+            INSERT INTO papers_fts(rowid, {_FTS_COLS})
+            VALUES (new.rowid, {_FTS_NEW});
         END;
 
         CREATE TRIGGER IF NOT EXISTS papers_ad AFTER DELETE ON papers BEGIN
-            INSERT INTO papers_fts(papers_fts, rowid, title, abstract, authors, author_corresponding_institution)
-            VALUES ('delete', old.rowid, old.title, old.abstract, old.authors, old.author_corresponding_institution);
+            INSERT INTO papers_fts(papers_fts, rowid, {_FTS_COLS})
+            VALUES ('delete', old.rowid, {_FTS_OLD});
         END;
 
         CREATE TRIGGER IF NOT EXISTS papers_au AFTER UPDATE ON papers BEGIN
-            INSERT INTO papers_fts(papers_fts, rowid, title, abstract, authors, author_corresponding_institution)
-            VALUES ('delete', old.rowid, old.title, old.abstract, old.authors, old.author_corresponding_institution);
-            INSERT INTO papers_fts(rowid, title, abstract, authors, author_corresponding_institution)
-            VALUES (new.rowid, new.title, new.abstract, new.authors, new.author_corresponding_institution);
+            INSERT INTO papers_fts(papers_fts, rowid, {_FTS_COLS})
+            VALUES ('delete', old.rowid, {_FTS_OLD});
+            INSERT INTO papers_fts(rowid, {_FTS_COLS})
+            VALUES (new.rowid, {_FTS_NEW});
         END;
 
         CREATE TABLE IF NOT EXISTS sync_meta (
@@ -65,13 +81,14 @@ def init_db(conn: sqlite3.Connection) -> None:
             value TEXT
         );
     """)
+    _initialized.add(conn_id)
 
 
 def upsert_papers(conn: sqlite3.Connection, papers: list[dict]) -> int:
     """Insert or replace papers. Returns number of papers upserted."""
     if not papers:
         return 0
-    # Deduplicate by DOI within the batch, keeping the highest version
+    # Deduplicate by DOI within the batch, keeping the highest version.
     by_doi: dict[str, dict] = {}
     for p in papers:
         existing = by_doi.get(p["doi"])
@@ -79,9 +96,7 @@ def upsert_papers(conn: sqlite3.Connection, papers: list[dict]) -> int:
             by_doi[p["doi"]] = p
         else:
             try:
-                new_ver = int(p.get("version", "0"))
-                old_ver = int(existing.get("version", "0"))
-                if new_ver > old_ver:
+                if int(p.get("version", "0")) > int(existing.get("version", "0")):
                     by_doi[p["doi"]] = p
             except ValueError:
                 by_doi[p["doi"]] = p
@@ -89,34 +104,26 @@ def upsert_papers(conn: sqlite3.Connection, papers: list[dict]) -> int:
     dois = [(p["doi"],) for p in papers]
     conn.executemany("DELETE FROM papers WHERE doi = ?", dois)
     conn.executemany(
-        """INSERT INTO papers (doi, title, authors, abstract, date, category, version,
-                               type, license, published, author_corresponding,
-                               author_corresponding_institution, jatsxml, server)
-           VALUES (:doi, :title, :authors, :abstract, :date, :category, :version,
-                   :type, :license, :published, :author_corresponding,
-                   :author_corresponding_institution, :jatsxml, :server)""",
+        f"INSERT INTO papers ({_INSERT_COLS}) VALUES ({_INSERT_PARAMS})",
         papers,
     )
     conn.commit()
     return len(papers)
 
 
+# -- Search ------------------------------------------------------------------
+
 _FTS5_OPERATORS = {"AND", "OR", "NOT", "NEAR"}
 
 
 def _add_prefix_matching(query: str) -> str:
-    """Append * to tokens that are 3+ chars and aren't FTS5 operators or already prefixed."""
-    # Don't modify queries containing quoted phrases
+    """Append * to tokens >= 3 chars that aren't FTS5 operators or already prefixed."""
     if '"' in query:
         return query
     tokens = query.split()
     result = []
     for token in tokens:
-        if (
-            token.upper() in _FTS5_OPERATORS
-            or token.endswith("*")
-            or ":" in token
-        ):
+        if token.upper() in _FTS5_OPERATORS or token.endswith("*") or ":" in token:
             result.append(token)
         elif len(token) >= 3:
             result.append(token + "*")
@@ -160,6 +167,9 @@ def search_count(
     return conn.execute(sql, params).fetchone()[0]
 
 
+_COMPACT_COLS = "p.doi, p.title, p.authors, p.date, p.category, p.server"
+
+
 def search(
     conn: sqlite3.Connection,
     query: str,
@@ -172,9 +182,7 @@ def search(
 ) -> list[dict]:
     """FTS5 search with optional filters."""
     where, params = _search_where(query, category, after, before)
-    columns = "p.doi, p.title, p.authors, p.date, p.category, p.server"
-    if detail:
-        columns = "p.*"
+    columns = "p.*" if detail else _COMPACT_COLS
     order = "rank" if sort == "relevance" else "p.date DESC"
     sql = f"""
         SELECT {columns}
@@ -187,6 +195,36 @@ def search(
     rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 
+
+# -- Single-paper lookup -----------------------------------------------------
+
+def get_paper(conn: sqlite3.Connection, doi: str) -> dict | None:
+    """Get a paper by DOI."""
+    row = conn.execute("SELECT * FROM papers WHERE doi = ?", (doi,)).fetchone()
+    return dict(row) if row else None
+
+
+# -- Metadata ----------------------------------------------------------------
+
+def get_categories(conn: sqlite3.Connection) -> list[dict]:
+    """Return all categories with paper counts, sorted by count descending."""
+    rows = conn.execute(
+        "SELECT category, COUNT(*) as count FROM papers GROUP BY category ORDER BY count DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_paper_count(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+
+
+def get_db_size_mb() -> float:
+    if DB_PATH.exists():
+        return DB_PATH.stat().st_size / (1024 * 1024)
+    return 0.0
+
+
+# -- Sync state ---------------------------------------------------------------
 
 def get_last_sync_date(conn: sqlite3.Connection) -> str | None:
     row = conn.execute("SELECT value FROM sync_meta WHERE key = 'last_sync_date'").fetchone()
@@ -215,27 +253,3 @@ def set_bulk_sync_cursor(conn: sqlite3.Connection, date: str) -> None:
 def clear_bulk_sync_cursor(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM sync_meta WHERE key = 'bulk_sync_cursor'")
     conn.commit()
-
-
-def get_paper_count(conn: sqlite3.Connection) -> int:
-    return conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
-
-
-def get_paper(conn: sqlite3.Connection, doi: str) -> dict | None:
-    """Get a paper by DOI."""
-    row = conn.execute("SELECT * FROM papers WHERE doi = ?", (doi,)).fetchone()
-    return dict(row) if row else None
-
-
-def get_categories(conn: sqlite3.Connection) -> list[dict]:
-    """Return all categories with paper counts, sorted by count descending."""
-    rows = conn.execute(
-        "SELECT category, COUNT(*) as count FROM papers GROUP BY category ORDER BY count DESC"
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_db_size_mb() -> float:
-    if DB_PATH.exists():
-        return DB_PATH.stat().st_size / (1024 * 1024)
-    return 0.0

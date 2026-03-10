@@ -19,22 +19,16 @@ def progress(i, n, total):
 
 async def main():
     conn = db.get_connection()
-    db.init_db(conn)
-
-    last = db.get_last_sync_date(conn)
-    cursor = db.get_bulk_sync_cursor(conn)
     count = db.get_paper_count(conn)
+    last = db.get_last_sync_date(conn)
 
     if last:
         log.info(f"Delta sync from {last} ({count} papers in db)")
         new = await sync.delta_sync(conn)
         log.info(f"Delta sync complete — {new} new papers, {db.get_paper_count(conn)} total")
-    elif cursor:
-        log.info(f"Resuming bulk sync from {cursor} ({count} papers in db)")
-        total = await sync.bulk_sync(conn, progress_callback=progress)
-        log.info(f"Bulk sync complete — {total} papers")
     else:
-        log.info("Starting fresh bulk sync")
+        cursor = db.get_bulk_sync_cursor(conn)
+        log.info(f"{'Resuming' if cursor else 'Starting'} bulk sync ({count} papers in db)")
         total = await sync.bulk_sync(conn, progress_callback=progress)
         log.info(f"Bulk sync complete — {total} papers")
 

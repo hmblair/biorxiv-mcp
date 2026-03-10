@@ -8,10 +8,12 @@ from datetime import date, datetime, timedelta
 import httpx
 
 from . import db
+from .db import PAPER_FIELDS
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.biorxiv.org/details"
+SERVERS = ("biorxiv", "medrxiv")
 PAGE_SIZE = 100
 MAX_RETRIES = 5
 RETRY_DELAY = 10  # seconds
@@ -27,36 +29,35 @@ async def fetch_page(
             resp = await client.get(url, timeout=90)
             resp.raise_for_status()
             data = resp.json()
-            # API sometimes returns 200 with an error message instead of data
             if "collection" not in data:
                 raise ValueError(f"Unexpected API response: {list(data.keys())}")
             return data
         except Exception as e:
             if attempt < MAX_RETRIES - 1:
-                wait = RETRY_DELAY * (2 ** attempt)  # exponential backoff
+                wait = RETRY_DELAY * (2 ** attempt)
                 logger.warning(f"Retry {attempt + 1}/{MAX_RETRIES} for {url}: {e} (waiting {wait}s)")
                 await asyncio.sleep(wait)
             else:
                 raise
 
 
-def _normalize_paper(paper: dict, server: str) -> dict:
-    return {
-        "doi": paper["doi"],
-        "title": paper.get("title", ""),
-        "authors": paper.get("authors", ""),
-        "abstract": paper.get("abstract", ""),
-        "date": paper.get("date", ""),
-        "category": paper.get("category", ""),
-        "version": paper.get("version", ""),
-        "type": paper.get("type", ""),
-        "license": paper.get("license", ""),
-        "published": paper.get("published", ""),
-        "author_corresponding": paper.get("author_corresponding", ""),
-        "author_corresponding_institution": paper.get("author_corresponding_institution", ""),
-        "jatsxml": paper.get("jatsxml", ""),
-        "server": server,
-    }
+def normalize_paper(paper: dict, server: str) -> dict:
+    """Extract the fields we store from a raw API response dict."""
+    return {f: paper.get(f, "") for f in PAPER_FIELDS if f != "server"} | {"server": server}
+
+
+def fetch_paper_by_doi(doi: str) -> dict | None:
+    """Fetch a single paper's metadata from the API by DOI (synchronous)."""
+    with httpx.Client(timeout=30) as client:
+        for server in SERVERS:
+            try:
+                resp = client.get(f"{BASE_URL}/{server}/{doi}")
+                data = resp.json()
+                if data.get("collection"):
+                    return normalize_paper(data["collection"][-1], server)
+            except httpx.HTTPError:
+                continue
+    return None
 
 
 async def fetch_range(
@@ -69,7 +70,7 @@ async def fetch_range(
         papers = data.get("collection", [])
         if not papers:
             break
-        yield [_normalize_paper(p, server) for p in papers]
+        yield [normalize_paper(p, server) for p in papers]
         total = int(data.get("messages", [{}])[0].get("total", 0))
         cursor += PAGE_SIZE
         if cursor >= total:
@@ -77,11 +78,7 @@ async def fetch_range(
 
 
 async def _sync_interval(
-    client: httpx.AsyncClient,
-    conn,
-    server: str,
-    start: str,
-    end: str,
+    client: httpx.AsyncClient, conn, server: str, start: str, end: str
 ) -> int:
     """Sync a single date interval. Returns paper count."""
     count = 0
@@ -92,9 +89,6 @@ async def _sync_interval(
 
 async def bulk_sync(conn, progress_callback=None) -> int:
     """Fetch all papers from 2013-01-01 to today. Returns total paper count."""
-    db.init_db(conn)
-
-    # Check for resume point
     cursor = db.get_bulk_sync_cursor(conn)
     start_date = date(2013, 1, 1)
     if cursor:
@@ -113,31 +107,23 @@ async def bulk_sync(conn, progress_callback=None) -> int:
         return db.get_paper_count(conn)
 
     total_new = 0
-    failed_intervals = []
 
     async with httpx.AsyncClient() as client:
         for i, (start, end) in enumerate(intervals):
             try:
-                for server in ("biorxiv", "medrxiv"):
+                for server in SERVERS:
                     total_new += await _sync_interval(client, conn, server, start, end)
                 db.set_bulk_sync_cursor(conn, end)
             except Exception:
                 logger.exception(f"Failed interval {start} to {end} after {MAX_RETRIES} retries")
-                failed_intervals.append((start, end))
-                # Skip this interval and continue -- we don't advance the cursor
-                # so it will be retried on next run
-                break
+                raise RuntimeError(
+                    f"Bulk sync stopped at interval {start}-{end}. "
+                    f"{db.get_paper_count(conn)} papers saved. Will resume on restart."
+                )
 
             if progress_callback:
                 progress_callback(i + 1, len(intervals), db.get_paper_count(conn))
 
-    if failed_intervals:
-        raise RuntimeError(
-            f"Bulk sync stopped at interval {failed_intervals[0][0]}-{failed_intervals[0][1]}. "
-            f"{db.get_paper_count(conn)} papers saved. Will resume from this point on restart."
-        )
-
-    # Mark bulk sync complete
     db.set_last_sync_date(conn, today.isoformat())
     db.clear_bulk_sync_cursor(conn)
     return db.get_paper_count(conn)
@@ -145,7 +131,6 @@ async def bulk_sync(conn, progress_callback=None) -> int:
 
 async def delta_sync(conn) -> int:
     """Fetch papers from last_sync_date to today."""
-    db.init_db(conn)
     last = db.get_last_sync_date(conn)
     if not last:
         return await bulk_sync(conn)
@@ -153,7 +138,7 @@ async def delta_sync(conn) -> int:
     today = date.today().isoformat()
     total = 0
     async with httpx.AsyncClient() as client:
-        for server in ("biorxiv", "medrxiv"):
+        for server in SERVERS:
             total += await _sync_interval(client, conn, server, last, today)
 
     db.set_last_sync_date(conn, today)
