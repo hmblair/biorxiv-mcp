@@ -101,6 +101,30 @@ def upsert_papers(conn: sqlite3.Connection, papers: list[dict]) -> int:
     return len(papers)
 
 
+_FTS5_OPERATORS = {"AND", "OR", "NOT", "NEAR"}
+
+
+def _add_prefix_matching(query: str) -> str:
+    """Append * to tokens that are 3+ chars and aren't FTS5 operators or already prefixed."""
+    # Don't modify queries containing quoted phrases
+    if '"' in query:
+        return query
+    tokens = query.split()
+    result = []
+    for token in tokens:
+        if (
+            token.upper() in _FTS5_OPERATORS
+            or token.endswith("*")
+            or ":" in token
+        ):
+            result.append(token)
+        elif len(token) >= 3:
+            result.append(token + "*")
+        else:
+            result.append(token)
+    return " ".join(result)
+
+
 def search(
     conn: sqlite3.Connection,
     query: str,
@@ -110,13 +134,14 @@ def search(
     before: str | None = None,
 ) -> list[dict]:
     """FTS5 search with optional filters."""
+    fts_query = _add_prefix_matching(query)
     sql = """
         SELECT p.*
         FROM papers_fts f
         JOIN papers p ON p.rowid = f.rowid
         WHERE papers_fts MATCH ?
     """
-    params: list = [query]
+    params: list = [fts_query]
     if category:
         sql += " AND p.category = ?"
         params.append(category)
