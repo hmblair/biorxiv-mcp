@@ -47,6 +47,32 @@ def search_biorxiv(
 
 
 @mcp.tool()
+def search_biorxiv_count(
+    query: str,
+    category: str | None = None,
+    after: str | None = None,
+    before: str | None = None,
+) -> dict:
+    """Count how many papers match a query without returning them.
+
+    Useful for gauging result size before searching, or for narrowing filters.
+
+    Args:
+        query: Search query (same syntax as search_biorxiv)
+        category: Filter by category
+        after: Only papers on or after this date (YYYY-MM-DD)
+        before: Only papers on or before this date (YYYY-MM-DD)
+    """
+    conn = db.get_connection()
+    try:
+        db.init_db(conn)
+        count = db.search_count(conn, query, category=category, after=after, before=before)
+        return {"query": query, "count": count}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
 def biorxiv_categories() -> list[dict]:
     """List all bioRxiv/medRxiv categories with paper counts."""
     conn = db.get_connection()

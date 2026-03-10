@@ -125,6 +125,41 @@ def _add_prefix_matching(query: str) -> str:
     return " ".join(result)
 
 
+def _search_where(query: str, category: str | None, after: str | None, before: str | None):
+    """Build the WHERE clause and params for search queries."""
+    fts_query = _add_prefix_matching(query)
+    where = "papers_fts MATCH ?"
+    params: list = [fts_query]
+    if category:
+        where += " AND p.category = ?"
+        params.append(category)
+    if after:
+        where += " AND p.date >= ?"
+        params.append(after)
+    if before:
+        where += " AND p.date <= ?"
+        params.append(before)
+    return where, params
+
+
+def search_count(
+    conn: sqlite3.Connection,
+    query: str,
+    category: str | None = None,
+    after: str | None = None,
+    before: str | None = None,
+) -> int:
+    """Return the number of papers matching a query."""
+    where, params = _search_where(query, category, after, before)
+    sql = f"""
+        SELECT COUNT(*)
+        FROM papers_fts f
+        JOIN papers p ON p.rowid = f.rowid
+        WHERE {where}
+    """
+    return conn.execute(sql, params).fetchone()[0]
+
+
 def search(
     conn: sqlite3.Connection,
     query: str,
@@ -135,7 +170,7 @@ def search(
     detail: bool = False,
 ) -> list[dict]:
     """FTS5 search with optional filters."""
-    fts_query = _add_prefix_matching(query)
+    where, params = _search_where(query, category, after, before)
     columns = "p.doi, p.title, p.authors, p.date, p.category, p.server"
     if detail:
         columns = "p.*"
@@ -143,19 +178,9 @@ def search(
         SELECT {columns}
         FROM papers_fts f
         JOIN papers p ON p.rowid = f.rowid
-        WHERE papers_fts MATCH ?
+        WHERE {where}
+        ORDER BY rank LIMIT ?
     """
-    params: list = [fts_query]
-    if category:
-        sql += " AND p.category = ?"
-        params.append(category)
-    if after:
-        sql += " AND p.date >= ?"
-        params.append(after)
-    if before:
-        sql += " AND p.date <= ?"
-        params.append(before)
-    sql += " ORDER BY rank LIMIT ?"
     params.append(limit)
     rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
