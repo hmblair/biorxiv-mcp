@@ -292,13 +292,15 @@ def health(request):
 
 
 if __name__ == "__main__":
-    if TRANSPORT == "sse":
+    if TRANSPORT == "stdio":
+        mcp.run(transport="stdio")
+    else:
         import uvicorn
         from starlette.routing import Route
 
-        app = mcp.sse_app()
+        # Use streamable HTTP (modern MCP transport, also supports SSE clients).
+        mcp.settings.streamable_http_path = "/mcp"
+        app = mcp.streamable_http_app()
         app.routes.append(Route("/health", health, methods=["GET"]))
-        logger.info("Starting SSE server on %s:%d", HOST, PORT)
+        logger.info("Starting server on %s:%d", HOST, PORT)
         uvicorn.run(app, host=HOST, port=PORT)
-    else:
-        mcp.run(transport="stdio")
