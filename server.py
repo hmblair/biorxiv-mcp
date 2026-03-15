@@ -298,9 +298,18 @@ if __name__ == "__main__":
         import uvicorn
         from starlette.routing import Route
 
+        from starlette.middleware.cors import CORSMiddleware
+
         # Use streamable HTTP (modern MCP transport, also supports SSE clients).
         mcp.settings.streamable_http_path = "/mcp"
         app = mcp.streamable_http_app()
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["mcp-session-id"],
+        )
         app.routes.append(Route("/health", health, methods=["GET"]))
         logger.info("Starting server on %s:%d", HOST, PORT)
         uvicorn.run(app, host=HOST, port=PORT)

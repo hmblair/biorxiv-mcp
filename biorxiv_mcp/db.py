@@ -38,7 +38,7 @@ def get_connection() -> sqlite3.Connection:
     """Create a new connection. Prefer ``connection()`` for normal use."""
     DB_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     except sqlite3.OperationalError as e:
         logger.error("Failed to open database at %s: %s", DB_PATH, e)
         raise
