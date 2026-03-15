@@ -1,0 +1,12 @@
+[Unit]
+Description=bioRxiv MCP server
+After=network.target
+
+[Service]
+WorkingDirectory=/home/hmblair/dev/biorxiv-mcp
+ExecStart=/home/hmblair/dev/biorxiv-mcp/.venv/bin/python server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
