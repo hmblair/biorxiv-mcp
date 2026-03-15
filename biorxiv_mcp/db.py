@@ -3,6 +3,7 @@
 import logging
 import os
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -29,9 +30,12 @@ _FTS_NEW = ", ".join(f"new.{f}" for f in FTS_FIELDS)
 _FTS_OLD = ", ".join(f"old.{f}" for f in FTS_FIELDS)
 
 _initialized: set[int] = set()
+_lock = threading.Lock()
+_shared_conn: sqlite3.Connection | None = None
 
 
 def get_connection() -> sqlite3.Connection:
+    """Create a new connection. Prefer ``connection()`` for normal use."""
     DB_DIR.mkdir(parents=True, exist_ok=True)
     try:
         conn = sqlite3.connect(str(DB_PATH))
@@ -48,12 +52,17 @@ def get_connection() -> sqlite3.Connection:
 
 @contextmanager
 def connection():
-    """Context manager that yields a DB connection and closes it on exit."""
-    conn = get_connection()
-    try:
-        yield conn
-    finally:
-        conn.close()
+    """Yield the shared DB connection, serialized via a lock.
+
+    Uses a single long-lived connection to avoid SQLite locking issues
+    under concurrent HTTP requests. The lock ensures only one thread
+    accesses the connection at a time.
+    """
+    global _shared_conn
+    with _lock:
+        if _shared_conn is None:
+            _shared_conn = get_connection()
+        yield _shared_conn
 
 
 def init_db(conn: sqlite3.Connection) -> None:

@@ -208,7 +208,19 @@ def test_prefix_matching_skips_already_prefixed():
 def test_connection_context_manager(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_DIR", tmp_path)
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr(db, "_shared_conn", None)
     db._initialized.clear()
     with db.connection() as conn:
         assert conn is not None
         db.get_paper_count(conn)  # should work
+
+
+def test_connection_reuses_shared_conn(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_DIR", tmp_path)
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr(db, "_shared_conn", None)
+    db._initialized.clear()
+    with db.connection() as c1:
+        pass
+    with db.connection() as c2:
+        assert c1 is c2

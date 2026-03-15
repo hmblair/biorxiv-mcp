@@ -25,7 +25,13 @@ logger = logging.getLogger(__name__)
 _search_bucket = TokenBucket(rate=10, burst=20)
 _sync_bucket = TokenBucket(rate=1 / 60, burst=1)
 
-mcp = FastMCP("biorxiv")
+# -- Server -------------------------------------------------------------------
+
+HOST = os.environ.get("HOST", "0.0.0.0")
+PORT = int(os.environ.get("PORT", "8000"))
+TRANSPORT = os.environ.get("TRANSPORT", "sse")
+
+mcp = FastMCP("biorxiv", host=HOST, port=PORT)
 
 
 @mcp.tool()
@@ -271,5 +277,28 @@ def download_paper(doi: str) -> dict:
         return {"error": f"Download failed: {e}"}
 
 
+def health(request):
+    """Health check handler for HTTP deployments."""
+    from starlette.responses import JSONResponse
+    try:
+        with db.connection() as conn:
+            return JSONResponse({
+                "status": "ok",
+                "paper_count": db.get_paper_count(conn),
+                "last_sync": db.get_last_sync_date(conn),
+            })
+    except Exception as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
+
+
 if __name__ == "__main__":
-    mcp.run()
+    if TRANSPORT == "sse":
+        import uvicorn
+        from starlette.routing import Route
+
+        app = mcp.sse_app()
+        app.routes.append(Route("/health", health, methods=["GET"]))
+        logger.info("Starting SSE server on %s:%d", HOST, PORT)
+        uvicorn.run(app, host=HOST, port=PORT)
+    else:
+        mcp.run(transport="stdio")
