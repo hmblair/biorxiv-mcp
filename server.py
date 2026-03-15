@@ -1,11 +1,29 @@
 """bioRxiv MCP server -- search and sync bioRxiv/medRxiv papers."""
 
 import asyncio
+import logging
+import os
+import sqlite3
 
 import httpx
 from mcp.server.fastmcp import FastMCP
 
 from biorxiv_mcp import db, sync
+from biorxiv_mcp.ratelimit import TokenBucket
+
+# -- Logging ------------------------------------------------------------------
+
+log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    level=getattr(logging, log_level, logging.INFO),
+)
+logger = logging.getLogger(__name__)
+
+# -- Rate limiting ------------------------------------------------------------
+
+_search_bucket = TokenBucket(rate=10, burst=20)
+_sync_bucket = TokenBucket(rate=1 / 60, burst=1)
 
 mcp = FastMCP("biorxiv")
 
@@ -35,17 +53,26 @@ def search_biorxiv(
         detail: If True, return all fields including abstract (default False)
         sort: "relevance" (default) or "date" (newest first)
     """
-    conn = db.get_connection()
+    wait = _search_bucket.consume()
+    if wait is not None:
+        return [{"error": f"Rate limit exceeded. Try again in {wait:.1f} seconds."}]
+
+    logger.info("search_biorxiv query=%r limit=%d category=%s sort=%s", query, limit, category, sort)
     try:
-        results = db.search(conn, query, limit=limit, category=category, after=after, before=before, detail=detail, sort=sort)
-        if not results:
-            count = db.get_paper_count(conn)
-            if count == 0:
-                return [{"message": "Database is empty. Run sync_biorxiv() first to populate it."}]
-            return [{"message": f"No results for '{query}' (searched {count} papers)."}]
-        return results
-    finally:
-        conn.close()
+        with db.connection() as conn:
+            results = db.search(conn, query, limit=limit, category=category, after=after, before=before, detail=detail, sort=sort)
+            if not results:
+                count = db.get_paper_count(conn)
+                if count == 0:
+                    return [{"message": "Database is empty. Run sync_biorxiv() first to populate it."}]
+                return [{"message": f"No results for '{query}' (searched {count} papers)."}]
+            return results
+    except sqlite3.Error as e:
+        logger.error("Database error in search_biorxiv: %s", e)
+        return [{"error": f"Database error: {e}"}]
+    except Exception as e:
+        logger.exception("Unexpected error in search_biorxiv")
+        return [{"error": f"Internal error: {e}"}]
 
 
 @mcp.tool()
@@ -65,22 +92,37 @@ def search_biorxiv_count(
         after: Only papers on or after this date (YYYY-MM-DD)
         before: Only papers on or before this date (YYYY-MM-DD)
     """
-    conn = db.get_connection()
+    wait = _search_bucket.consume()
+    if wait is not None:
+        return {"error": f"Rate limit exceeded. Try again in {wait:.1f} seconds."}
+
+    logger.info("search_biorxiv_count query=%r", query)
     try:
-        count = db.search_count(conn, query, category=category, after=after, before=before)
-        return {"query": query, "count": count}
-    finally:
-        conn.close()
+        with db.connection() as conn:
+            count = db.search_count(conn, query, category=category, after=after, before=before)
+            return {"query": query, "count": count}
+    except sqlite3.Error as e:
+        logger.error("Database error in search_biorxiv_count: %s", e)
+        return {"error": f"Database error: {e}"}
+    except Exception as e:
+        logger.exception("Unexpected error in search_biorxiv_count")
+        return {"error": f"Internal error: {e}"}
 
 
 @mcp.tool()
-def biorxiv_categories() -> list[dict]:
+def biorxiv_categories() -> list[dict] | dict:
     """List all bioRxiv/medRxiv categories with paper counts."""
-    conn = db.get_connection()
+    wait = _search_bucket.consume()
+    if wait is not None:
+        return {"error": f"Rate limit exceeded. Try again in {wait:.1f} seconds."}
+
+    logger.info("biorxiv_categories")
     try:
-        return db.get_categories(conn)
-    finally:
-        conn.close()
+        with db.connection() as conn:
+            return db.get_categories(conn)
+    except sqlite3.Error as e:
+        logger.error("Database error in biorxiv_categories: %s", e)
+        return {"error": f"Database error: {e}"}
 
 
 @mcp.tool()
@@ -90,41 +132,57 @@ async def sync_biorxiv() -> dict:
     Runs delta sync if the database has been synced before, otherwise bulk sync.
     Bulk sync fetches all papers from 2013 to today and takes several hours.
     """
-    conn = db.get_connection()
+    wait = _sync_bucket.consume()
+    if wait is not None:
+        return {"error": f"Rate limit exceeded. Try again in {wait:.0f} seconds."}
+
+    logger.info("sync_biorxiv starting")
     try:
-        last = db.get_last_sync_date(conn)
-        if last:
-            count = await sync.delta_sync(conn)
-            return {
-                "status": "delta_sync_complete",
-                "new_papers": count,
-                "total_papers": db.get_paper_count(conn),
-                "last_sync": db.get_last_sync_date(conn),
-            }
-        else:
-            count = await sync.bulk_sync(conn)
-            return {
-                "status": "bulk_sync_complete",
-                "total_papers": count,
-                "last_sync": db.get_last_sync_date(conn),
-            }
-    finally:
-        conn.close()
+        with db.connection() as conn:
+            last = db.get_last_sync_date(conn)
+            if last:
+                count = await sync.delta_sync(conn)
+                result = {
+                    "status": "delta_sync_complete",
+                    "new_papers": count,
+                    "total_papers": db.get_paper_count(conn),
+                    "last_sync": db.get_last_sync_date(conn),
+                }
+            else:
+                count = await sync.bulk_sync(conn)
+                result = {
+                    "status": "bulk_sync_complete",
+                    "total_papers": count,
+                    "last_sync": db.get_last_sync_date(conn),
+                }
+            logger.info("sync_biorxiv complete: %s", result)
+            return result
+    except sqlite3.Error as e:
+        logger.error("Database error in sync_biorxiv: %s", e)
+        return {"error": f"Database error: {e}"}
+    except RuntimeError as e:
+        logger.error("Sync interrupted: %s", e)
+        return {"error": str(e)}
+    except Exception as e:
+        logger.exception("Unexpected error in sync_biorxiv")
+        return {"error": f"Internal error: {e}"}
 
 
 @mcp.tool()
 def biorxiv_status() -> dict:
     """Get the status of the local bioRxiv database."""
-    conn = db.get_connection()
+    logger.info("biorxiv_status")
     try:
-        return {
-            "paper_count": db.get_paper_count(conn),
-            "last_sync": db.get_last_sync_date(conn),
-            "db_size_mb": round(db.get_db_size_mb(), 2),
-            "db_path": str(db.DB_PATH),
-        }
-    finally:
-        conn.close()
+        with db.connection() as conn:
+            return {
+                "paper_count": db.get_paper_count(conn),
+                "last_sync": db.get_last_sync_date(conn),
+                "db_size_mb": round(db.get_db_size_mb(), 2),
+                "db_path": str(db.DB_PATH),
+            }
+    except sqlite3.Error as e:
+        logger.error("Database error in biorxiv_status: %s", e)
+        return {"error": f"Database error: {e}"}
 
 
 @mcp.tool()
@@ -137,19 +195,29 @@ def get_paper(doi: str) -> dict:
     Args:
         doi: The paper DOI (e.g. "10.1101/2024.01.05.574328")
     """
-    conn = db.get_connection()
-    try:
-        paper = db.get_paper(conn, doi)
-        if paper:
-            return paper
-    finally:
-        conn.close()
+    wait = _search_bucket.consume()
+    if wait is not None:
+        return {"error": f"Rate limit exceeded. Try again in {wait:.1f} seconds."}
 
-    paper = sync.fetch_paper_by_doi(doi)
-    if paper:
-        paper["_source"] = "api"
-        return paper
-    return {"error": f"DOI {doi} not found in local database or bioRxiv API."}
+    logger.info("get_paper doi=%r", doi)
+    try:
+        with db.connection() as conn:
+            paper = db.get_paper(conn, doi)
+            if paper:
+                return paper
+    except sqlite3.Error as e:
+        logger.error("Database error in get_paper: %s", e)
+        return {"error": f"Database error: {e}"}
+
+    try:
+        paper = sync.fetch_paper_by_doi(doi)
+        if paper:
+            paper["_source"] = "api"
+            return paper
+        return {"error": f"DOI {doi} not found in local database or bioRxiv API."}
+    except httpx.HTTPError as e:
+        logger.error("API error fetching DOI %s: %s", doi, e)
+        return {"error": f"API error: {e}"}
 
 
 @mcp.tool()
@@ -161,12 +229,17 @@ def download_paper(doi: str) -> dict:
     Args:
         doi: The paper DOI (e.g. "10.1101/2024.01.05.574328")
     """
-    # Get paper metadata (local DB or API) to determine server and version.
-    conn = db.get_connection()
+    wait = _search_bucket.consume()
+    if wait is not None:
+        return {"error": f"Rate limit exceeded. Try again in {wait:.1f} seconds."}
+
+    logger.info("download_paper doi=%r", doi)
     try:
-        paper = db.get_paper(conn, doi)
-    finally:
-        conn.close()
+        with db.connection() as conn:
+            paper = db.get_paper(conn, doi)
+    except sqlite3.Error as e:
+        logger.error("Database error in download_paper: %s", e)
+        return {"error": f"Database error: {e}"}
 
     if not paper:
         paper = sync.fetch_paper_by_doi(doi)
@@ -190,9 +263,11 @@ def download_paper(doi: str) -> dict:
             safe_doi = doi.replace("/", "_")
             output = download_dir / f"{safe_doi}.pdf"
             output.write_bytes(resp.content)
+            logger.info("Downloaded %s (%.2f MB)", output, len(resp.content) / (1024 * 1024))
             return {"path": str(output), "size_mb": round(len(resp.content) / (1024 * 1024), 2)}
 
     except httpx.HTTPError as e:
+        logger.error("Download failed for %s: %s", doi, e)
         return {"error": f"Download failed: {e}"}
 
 

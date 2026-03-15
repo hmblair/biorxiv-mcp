@@ -1,8 +1,12 @@
 """SQLite FTS5 index for bioRxiv papers."""
 
+import logging
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 DB_DIR = Path(os.environ.get("BIORXIV_MCP_DATA", Path.home() / ".local/share/biorxiv-mcp"))
 DB_PATH = DB_DIR / "biorxiv.db"
@@ -29,12 +33,27 @@ _initialized: set[int] = set()
 
 def get_connection() -> sqlite3.Connection:
     DB_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+    except sqlite3.OperationalError as e:
+        logger.error("Failed to open database at %s: %s", DB_PATH, e)
+        raise
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     init_db(conn)
+    logger.debug("Opened database connection to %s", DB_PATH)
     return conn
+
+
+@contextmanager
+def connection():
+    """Context manager that yields a DB connection and closes it on exit."""
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def init_db(conn: sqlite3.Connection) -> None:
