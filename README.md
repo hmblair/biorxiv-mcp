@@ -68,10 +68,22 @@ Encrypt certificate issuance and renewal automatically.
 **3. Register with an agent.** For Claude Code:
 
 ```sh
-claude mcp add --transport http --scope user biorxiv \
+claude mcp add --transport http --scope user biorxiv-mcp \
   --header "Authorization: Bearer <your-key>" \
   https://biorxiv-mcp.yourdomain.com/mcp
 ```
+
+Or, from a clone of this repo on any machine:
+
+```sh
+make install \
+  MCP_URL=https://biorxiv-mcp.yourdomain.com/mcp \
+  MCP_AUTH="Bearer <your-key>"
+```
+
+This registers the endpoint + auth header with Claude Code, Claude
+Desktop, and OpenCode in one shot. The client machine does not need
+the server installed — only `python3` and this repo.
 
 Revoke a key by removing it from the env file and `make restart`.
 

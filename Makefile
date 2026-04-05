@@ -7,15 +7,20 @@ RUN_USER ?= $(USER)
 SERVICE := biorxiv-mcp
 PORT ?= 8000
 MCP_URL ?= http://localhost:$(PORT)/mcp
+# Optional: full Authorization header value, e.g. MCP_AUTH="Bearer <token>"
+MCP_AUTH ?=
 
 .PHONY: install uninstall install-service uninstall-service start stop restart status
 
 # Register the running HTTP MCP with Claude Code, Claude Desktop, and OpenCode.
+# For a remote server with auth:
+#   make install MCP_URL=https://biorxiv.example.com/mcp MCP_AUTH="Bearer $$KEY"
 install:
-	$(PYTHON) $(DEPLOY)/install_mcp.py install --name $(SERVICE) --url $(MCP_URL)
+	python3 $(DEPLOY)/install_mcp.py install --name $(SERVICE) --url $(MCP_URL) \
+	    $(if $(MCP_AUTH),--auth "$(MCP_AUTH)",)
 
 uninstall:
-	$(PYTHON) $(DEPLOY)/install_mcp.py uninstall --name $(SERVICE)
+	python3 $(DEPLOY)/install_mcp.py uninstall --name $(SERVICE)
 
 # install-service requires sudo to write under /etc/systemd/system.
 install-service: $(VENV)
