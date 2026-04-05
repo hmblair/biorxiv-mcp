@@ -1,120 +1,45 @@
 """Bearer-token authentication and per-key rate limiting.
 
-API keys are supplied via environment variables, hashed at startup, and
-looked up in constant time on each request. Each key carries an
-``unlimited`` flag controlling whether the per-key rate limit applies.
-
-If no keys are configured, the middleware allows all requests through
-but logs a warning — this preserves the local/stdio workflow where auth
-is unnecessary.
+Keys are stored in the ``api_keys`` SQLite table and looked up on each
+request. No restart is needed to add or revoke keys.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import threading
-from collections.abc import Mapping
-from dataclasses import dataclass
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from . import db
+from .keys import ApiKey, any_keys_exist, hash_token, load_active
 from .ratelimit import TokenBucket
 
 logger = logging.getLogger(__name__)
 
-# Paths that bypass auth (liveness checks).
 _UNAUTHED_PATHS = frozenset({"/health"})
 
-# Per-key request budget. Generous enough for normal agent usage; tight
-# enough to make brute-forcing infeasible. Configurable via env vars.
-_KEY_RATE = float(os.environ.get("BIORXIV_MCP_KEY_RATE", "1.0"))       # req/sec
-_KEY_BURST = int(os.environ.get("BIORXIV_MCP_KEY_BURST", "60"))        # bucket size
-# Shared bucket for unauthenticated (open-mode) requests, keyed by client IP.
+_KEY_RATE = float(os.environ.get("BIORXIV_MCP_KEY_RATE", "1.0"))
+_KEY_BURST = int(os.environ.get("BIORXIV_MCP_KEY_BURST", "60"))
 _ANON_RATE = float(os.environ.get("BIORXIV_MCP_ANON_RATE", "0.5"))
 _ANON_BURST = int(os.environ.get("BIORXIV_MCP_ANON_BURST", "30"))
 
 
-@dataclass(frozen=True, slots=True)
-class ApiKey:
-    """An authenticated API key.
-
-    ``hash`` is the SHA-256 hex digest of the raw token. ``unlimited``
-    keys bypass the per-key rate limit.
-    """
-    hash: str
-    unlimited: bool = False
-
-    @property
-    def key_id(self) -> str:
-        """Short, safe-to-log identifier (first 8 chars of the hash)."""
-        return self.hash[:8]
-
-
-def _hash_token(raw: str) -> str:
-    return hashlib.sha256(raw.encode()).hexdigest()
-
-
-def _split(env_value: str) -> list[str]:
-    return [t.strip() for t in env_value.split(",") if t.strip()]
-
-
-def load_keys(
-    api_env: str | None = None,
-    unlimited_env: str | None = None,
-) -> dict[str, ApiKey]:
-    """Load API keys from environment variables.
-
-    Reads ``BIORXIV_MCP_API_KEYS`` (rate-limited) and
-    ``BIORXIV_MCP_UNLIMITED_KEYS`` (bypass rate limiting). If a token
-    appears in both, the unlimited flag wins.
-
-    Returns a dict keyed by SHA-256 hex digest. An empty dict means
-    auth is disabled.
-    """
-    if api_env is None:
-        api_env = os.environ.get("BIORXIV_MCP_API_KEYS", "")
-    if unlimited_env is None:
-        unlimited_env = os.environ.get("BIORXIV_MCP_UNLIMITED_KEYS", "")
-    keys: dict[str, ApiKey] = {}
-    for raw in _split(api_env):
-        h = _hash_token(raw)
-        keys[h] = ApiKey(hash=h, unlimited=False)
-    for raw in _split(unlimited_env):
-        h = _hash_token(raw)
-        keys[h] = ApiKey(hash=h, unlimited=True)
-    return keys
-
-
-def hash_token(raw: str) -> str:
-    """Public helper: hash a raw token the same way keys are hashed."""
-    return _hash_token(raw)
-
-
 class BearerAuth(BaseHTTPMiddleware):
-    """Validate ``Authorization: Bearer <token>`` and enforce per-key limits."""
+    """Validate ``Authorization: Bearer <token>`` against the api_keys table."""
 
-    def __init__(self, app, keys: Mapping[str, ApiKey] | None = None):
+    def __init__(self, app):
         super().__init__(app)
-        self._keys: dict[str, ApiKey] = dict(keys) if keys is not None else load_keys()
         self._buckets: dict[str, TokenBucket] = {}
         self._lock = threading.Lock()
-        if not self._keys:
-            logger.warning(
-                "No API keys configured (BIORXIV_MCP_API_KEYS unset); "
-                "HTTP transport is OPEN. Set keys before exposing publicly."
-            )
-        else:
-            n_unlimited = sum(1 for k in self._keys.values() if k.unlimited)
-            logger.info("Loaded %d API key(s) (%d unlimited)",
-                        len(self._keys), n_unlimited)
 
-    @property
-    def auth_enabled(self) -> bool:
-        return bool(self._keys)
+    def _load_keys(self) -> tuple[dict[str, ApiKey], bool]:
+        """Returns (active_keys, auth_required)."""
+        with db.connection() as conn:
+            return load_active(conn), any_keys_exist(conn)
 
     def _bucket(self, identity: str, rate: float, burst: int) -> TokenBucket:
         with self._lock:
@@ -128,8 +53,6 @@ class BearerAuth(BaseHTTPMiddleware):
         wait = self._bucket(identity, rate, burst).consume()
         if wait is None:
             return None
-        # Cap Retry-After to something reasonable; clients treat overly large
-        # values as "never retry" which we don't want.
         retry_after = 3600 if wait == float("inf") else max(1, int(wait) + 1)
         detail = "never" if wait == float("inf") else f"{wait:.1f} seconds"
         return JSONResponse(
@@ -143,9 +66,9 @@ class BearerAuth(BaseHTTPMiddleware):
             return await call_next(request)
 
         client_ip = request.client.host if request.client else "-"
+        active_keys, auth_required = self._load_keys()
 
-        if not self._keys:
-            # Open mode: still enforce a per-IP rate limit to deter abuse.
+        if not auth_required:
             limited = self._rate_limit(f"ip:{client_ip}", _ANON_RATE, _ANON_BURST)
             if limited is not None:
                 return limited
@@ -161,7 +84,7 @@ class BearerAuth(BaseHTTPMiddleware):
                 headers={"WWW-Authenticate": 'Bearer realm="biorxiv-mcp"'},
             )
 
-        key = self._keys.get(_hash_token(auth[7:].strip()))
+        key = active_keys.get(hash_token(auth[7:].strip()))
         if key is None:
             logger.warning("auth invalid ip=%s path=%s", client_ip, request.url.path)
             return JSONResponse({"error": "invalid token"}, status_code=403)

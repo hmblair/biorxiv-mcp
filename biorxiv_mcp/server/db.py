@@ -119,6 +119,14 @@ def init_db(conn: sqlite3.Connection) -> None:
             key TEXT PRIMARY KEY,
             value TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS api_keys (
+            hash TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            unlimited INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            disabled INTEGER NOT NULL DEFAULT 0
+        );
     """)
     _initialized_ids.add(id(conn))
 

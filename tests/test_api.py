@@ -24,9 +24,7 @@ def client(tmp_path, monkeypatch):
         yield conn
 
     monkeypatch.setattr(db, "connection", fake_connection)
-    # Disable auth for unit tests.
-    monkeypatch.setenv("BIORXIV_MCP_API_KEYS", "")
-    monkeypatch.setenv("BIORXIV_MCP_UNLIMITED_KEYS", "")
+    # No keys in the DB → open mode (auth disabled).
     app = create_app()
     yield TestClient(app), conn
     conn.close()
