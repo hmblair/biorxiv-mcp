@@ -52,6 +52,13 @@ def load_keys(env_value: str | None = None) -> set[str]:
     return keys
 
 
+def load_unlimited_keys(env_value: str | None = None) -> set[str]:
+    """Load API keys that bypass rate limiting (otherwise authenticated normally)."""
+    if env_value is None:
+        env_value = os.environ.get("BIORXIV_MCP_UNLIMITED_KEYS", "")
+    return {_hash_key(k.strip()) for k in env_value.split(",") if k.strip()}
+
+
 def _key_id(digest: str) -> str:
     """Short, safe-to-log identifier for a key (first 8 chars of its hash)."""
     return digest[:8]
@@ -60,9 +67,19 @@ def _key_id(digest: str) -> str:
 class BearerAuth(BaseHTTPMiddleware):
     """Validate ``Authorization: Bearer <token>`` and enforce per-key limits."""
 
-    def __init__(self, app, keys: Iterable[str] | None = None):
+    def __init__(
+        self,
+        app,
+        keys: Iterable[str] | None = None,
+        unlimited_keys: Iterable[str] | None = None,
+    ):
         super().__init__(app)
         self._keys: set[str] = set(keys) if keys is not None else load_keys()
+        self._unlimited: set[str] = (
+            set(unlimited_keys) if unlimited_keys is not None else load_unlimited_keys()
+        )
+        # Unlimited keys are implicitly valid even if not listed in keys.
+        self._keys |= self._unlimited
         self._buckets: dict[str, TokenBucket] = {}
         self._lock = threading.Lock()
         if not self._keys:
@@ -71,7 +88,8 @@ class BearerAuth(BaseHTTPMiddleware):
                 "HTTP transport is OPEN. Set keys before exposing publicly."
             )
         else:
-            logger.info("Loaded %d API key(s)", len(self._keys))
+            logger.info("Loaded %d API key(s) (%d unlimited)",
+                        len(self._keys), len(self._unlimited))
 
     @property
     def auth_enabled(self) -> bool:
@@ -128,10 +146,11 @@ class BearerAuth(BaseHTTPMiddleware):
             return JSONResponse({"error": "invalid token"}, status_code=403)
 
         key_id = _key_id(presented)
-        limited = self._rate_limit(f"key:{key_id}", _KEY_RATE, _KEY_BURST)
-        if limited is not None:
-            logger.info("rate_limited key=%s ip=%s", key_id, client_ip)
-            return limited
+        if presented not in self._unlimited:
+            limited = self._rate_limit(f"key:{key_id}", _KEY_RATE, _KEY_BURST)
+            if limited is not None:
+                logger.info("rate_limited key=%s ip=%s", key_id, client_ip)
+                return limited
 
         request.state.key_id = key_id
         return await call_next(request)

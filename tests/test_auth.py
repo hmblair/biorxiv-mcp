@@ -114,3 +114,34 @@ def test_per_key_rate_limit(monkeypatch):
     monkeypatch.delenv("BIORXIV_MCP_KEY_RATE", raising=False)
     monkeypatch.delenv("BIORXIV_MCP_KEY_BURST", raising=False)
     importlib.reload(auth_mod)
+
+
+def test_unlimited_key_bypasses_rate_limit(monkeypatch):
+    monkeypatch.setenv("BIORXIV_MCP_KEY_RATE", "0")
+    monkeypatch.setenv("BIORXIV_MCP_KEY_BURST", "1")
+    import importlib
+    from biorxiv_mcp import auth as auth_mod
+    importlib.reload(auth_mod)
+
+    unlimited = {auth_mod._hash_key("admin")}
+    app = Starlette(routes=[Route("/mcp", _ok, methods=["GET"])])
+    app.add_middleware(auth_mod.BearerAuth, keys=set(), unlimited_keys=unlimited)
+    client = TestClient(app)
+    h = {"Authorization": "Bearer admin"}
+    # All three requests succeed despite burst=1.
+    for _ in range(3):
+        assert client.get("/mcp", headers=h).status_code == 200
+
+    monkeypatch.delenv("BIORXIV_MCP_KEY_RATE", raising=False)
+    monkeypatch.delenv("BIORXIV_MCP_KEY_BURST", raising=False)
+    importlib.reload(auth_mod)
+
+
+def test_unlimited_key_is_auto_valid():
+    # Unlimited keys don't need to also be listed in keys=.
+    from biorxiv_mcp.auth import BearerAuth, _hash_key
+    app = Starlette(routes=[Route("/mcp", _ok, methods=["GET"])])
+    app.add_middleware(BearerAuth, keys=set(), unlimited_keys={_hash_key("admin")})
+    client = TestClient(app)
+    assert client.get("/mcp", headers={"Authorization": "Bearer admin"}).status_code == 200
+    assert client.get("/mcp", headers={"Authorization": "Bearer other"}).status_code == 403

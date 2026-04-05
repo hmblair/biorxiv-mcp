@@ -12,7 +12,7 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 from . import db, sync
-from .auth import BearerAuth, load_keys
+from .auth import BearerAuth, load_keys, load_unlimited_keys
 from .ratelimit import TokenBucket
 from .toolkit import tool, validate_date
 
@@ -290,7 +290,7 @@ def health(request):
                 "status": "ok",
                 "paper_count": db.get_paper_count(conn),
                 "last_sync": db.get_last_sync_date(conn),
-                "auth_enabled": bool(load_keys()),
+                "auth_enabled": bool(load_keys() | load_unlimited_keys()),
             })
     except Exception as e:
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
