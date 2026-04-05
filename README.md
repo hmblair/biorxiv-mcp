@@ -82,19 +82,23 @@ make start / stop / restart / status
 
 ### API keys
 
-Generate keys and put them in `deploy/biorxiv-mcp.env`:
+Keys are stored in the SQLite database and managed via CLI. No restart
+is needed to add or revoke keys.
 
 ```sh
-python -c "import secrets; print(secrets.token_urlsafe(32))"
+biorxiv-mcp-server keys add --label "alice-laptop" --unlimited
+biorxiv-mcp-server keys add --label "ci-bot"
+biorxiv-mcp-server keys list
+biorxiv-mcp-server keys revoke <key_id>
+biorxiv-mcp-server keys import --label "admin" --token <raw> --unlimited
 ```
 
-| Env var | Purpose |
-|---|---|
-| `BIORXIV_MCP_API_KEYS` | Comma-separated bearer tokens (rate-limited). |
-| `BIORXIV_MCP_UNLIMITED_KEYS` | Tokens that bypass rate limiting (implicitly valid). |
+When any keys exist in the database, all `/api/*` requests require
+`Authorization: Bearer <key>`. `/health` remains unauthenticated.
+Revoking all keys locks out everyone (does not revert to open mode).
 
-When set, all `/api/*` requests require `Authorization: Bearer <key>`.
-`/health` remains unauthenticated.
+Keys with `--unlimited` bypass the per-key rate limit. Use sparingly
+for trusted operators.
 
 ## REST API
 
@@ -118,10 +122,8 @@ When set, all `/api/*` requests require `Authorization: Bearer <key>`.
 | `HOST` | `127.0.0.1` | Bind address |
 | `PORT` | `8000` | Bind port |
 | `CORS_ORIGINS` | `*` | Allowed CORS origins |
-| `BIORXIV_MCP_API_KEYS` | *(unset)* | Bearer tokens (rate-limited) |
-| `BIORXIV_MCP_UNLIMITED_KEYS` | *(unset)* | Bearer tokens (unlimited) |
-| `BIORXIV_MCP_KEY_RATE` | `1.0` | Per-key refill (req/s) |
-| `BIORXIV_MCP_KEY_BURST` | `60` | Per-key bucket size |
+| `BIORXIV_MCP_KEY_RATE` | `1.0` | Per-key rate limit refill (req/s) |
+| `BIORXIV_MCP_KEY_BURST` | `60` | Per-key rate limit bucket size |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Trusted proxy IPs |
 | `LOG_LEVEL` | `INFO` | Log level |
 | `BIORXIV_MCP_DATA` | `~/.local/share/biorxiv-mcp` | DB directory |
@@ -139,12 +141,13 @@ When set, all `/api/*` requests require `Authorization: Bearer <key>`.
 biorxiv_mcp/
   server/
     app.py          # Starlette REST API
-    auth.py         # Bearer-token middleware + per-key rate limiting
+    auth.py         # Bearer-token middleware (reads keys from DB)
     db.py           # SQLite schema, FTS5 index, connection management
+    keys.py         # API key CRUD (generate, import, list, revoke)
     sync.py         # bioRxiv API client (bulk, delta, auto, resolve)
     ratelimit.py    # Token bucket
     sync_runner.py  # Standalone sync CLI
-    main.py         # Server entry point
+    main.py         # Server entry point + key management CLI
   client/
     tools.py        # MCP tool definitions
     api.py          # HTTP client for the REST API
