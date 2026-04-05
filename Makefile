@@ -1,32 +1,19 @@
 VENV := $(CURDIR)/.venv
-BIN := $(VENV)/bin/biorxiv-mcp
+PYTHON := $(VENV)/bin/python
 DEPLOY := $(CURDIR)/deploy
-OPENCODE_CONFIG := $(HOME)/.config/opencode/opencode.json
 SYSTEMD_USER_DIR := $(HOME)/.config/systemd/user
 SERVICE := biorxiv-mcp
+PORT ?= 8000
+MCP_URL ?= http://localhost:$(PORT)/mcp
 
 .PHONY: install uninstall install-service uninstall-service start stop restart status
 
-install: $(VENV)
-	claude mcp remove -s user $(SERVICE) 2>/dev/null || true
-	claude mcp add -s user $(SERVICE) -- $(BIN)
-	@python3 -c '\
-import json; \
-f = "$(OPENCODE_CONFIG)"; \
-d = json.load(open(f)); \
-d.setdefault("mcp", {})["$(SERVICE)"] = {"type": "local", "command": ["$(BIN)"]}; \
-json.dump(d, open(f, "w"), indent=2); \
-print("Added $(SERVICE) to opencode config")'
+# Register the running HTTP MCP with Claude Code, Claude Desktop, and OpenCode.
+install:
+	$(PYTHON) $(DEPLOY)/install_mcp.py install --name $(SERVICE) --url $(MCP_URL)
 
 uninstall:
-	claude mcp remove -s user $(SERVICE) || true
-	@python3 -c '\
-import json; \
-f = "$(OPENCODE_CONFIG)"; \
-d = json.load(open(f)); \
-d.get("mcp", {}).pop("$(SERVICE)", None); \
-json.dump(d, open(f, "w"), indent=2); \
-print("Removed $(SERVICE) from opencode config")'
+	$(PYTHON) $(DEPLOY)/install_mcp.py uninstall --name $(SERVICE)
 
 install-service: $(VENV)
 	sed 's|@PROJECT_ROOT@|$(CURDIR)|g' $(DEPLOY)/$(SERVICE).service.in > $(SYSTEMD_USER_DIR)/$(SERVICE).service
