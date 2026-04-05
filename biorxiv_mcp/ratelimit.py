@@ -25,4 +25,7 @@ class TokenBucket:
         if self._tokens >= 1:
             self._tokens -= 1
             return None
+        if self.rate <= 0:
+            # No refill — return a large sentinel wait time.
+            return float("inf")
         return (1 - self._tokens) / self.rate

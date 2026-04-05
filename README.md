@@ -40,6 +40,39 @@ Subsequent syncs are fast deltas. You can trigger a sync manually:
 .venv/bin/biorxiv-mcp-sync
 ```
 
+## Deploying publicly (HTTPS + API keys)
+
+For a public deployment, put a reverse proxy (Caddy, nginx, cloudflared)
+in front to terminate TLS and enable bearer-token auth in the MCP server
+itself.
+
+**1. Generate API keys** and put them in `deploy/biorxiv-mcp.env`:
+
+```sh
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+# BIORXIV_MCP_API_KEYS=key1,key2,key3
+```
+
+When `BIORXIV_MCP_API_KEYS` is set, every request to `/mcp` must send
+`Authorization: Bearer <key>`. Keys are hashed at startup and compared in
+constant time. `/health` remains unauthenticated. A per-key rate limit
+(default 60-request burst, 1/s refill) is enforced by the middleware.
+
+**2. Terminate TLS at a reverse proxy** that forwards to
+`127.0.0.1:8000`. The MCP server stays bound to localhost; only the
+proxy is exposed. Most proxies (Caddy, cloudflared) will handle Let's
+Encrypt certificate issuance and renewal automatically.
+
+**3. Register with an agent.** For Claude Code:
+
+```sh
+claude mcp add --transport http --scope user biorxiv \
+  --header "Authorization: Bearer <your-key>" \
+  https://biorxiv-mcp.yourdomain.com/mcp
+```
+
+Revoke a key by removing it from the env file and `make restart`.
+
 ## Configuration
 
 All settings are env vars, defaulted in `deploy/biorxiv-mcp.env.example`.
@@ -48,10 +81,14 @@ automatically.
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `HOST` | `0.0.0.0` | HTTP bind address |
+| `HOST` | `127.0.0.1` | HTTP bind address (set to `0.0.0.0` only without a reverse proxy) |
 | `PORT` | `8000` | HTTP port |
 | `TRANSPORT` | `http` | `http` (streamable HTTP) or `stdio` |
 | `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
+| `BIORXIV_MCP_API_KEYS` | *(unset)* | Comma-separated bearer tokens. Unset = open mode. |
+| `BIORXIV_MCP_KEY_RATE` | `1.0` | Per-key token refill (req/s) |
+| `BIORXIV_MCP_KEY_BURST` | `60` | Per-key bucket size |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Trusted proxy IPs for `X-Forwarded-For` |
 | `LOG_LEVEL` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR` |
 | `BIORXIV_MCP_DATA` | `~/.local/share/biorxiv-mcp` | DB + PDF directory |
 

@@ -12,6 +12,7 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 from . import db, sync
+from .auth import BearerAuth, load_keys
 from .ratelimit import TokenBucket
 from .toolkit import tool, validate_date
 
@@ -45,11 +46,14 @@ def validate_date_range(after: str | None, before: str | None) -> tuple[str | No
 
 # -- Server -------------------------------------------------------------------
 
-HOST = os.environ.get("HOST", "0.0.0.0")
+HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8000"))
 TRANSPORT = os.environ.get("TRANSPORT", "http")
 # Comma-separated list of allowed CORS origins; "*" allows all.
 CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+# Comma-separated proxy IPs permitted to set X-Forwarded-For. "127.0.0.1" is
+# appropriate for a reverse proxy (Caddy, cloudflared) on the same host.
+FORWARDED_ALLOW_IPS = os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1")
 
 mcp = FastMCP("biorxiv", host=HOST, port=PORT)
 
@@ -286,6 +290,7 @@ def health(request):
                 "status": "ok",
                 "paper_count": db.get_paper_count(conn),
                 "last_sync": db.get_last_sync_date(conn),
+                "auth_enabled": bool(load_keys()),
             })
     except Exception as e:
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
@@ -303,6 +308,9 @@ def main() -> None:
     # Streamable HTTP (modern MCP transport, also supports SSE clients).
     mcp.settings.streamable_http_path = "/mcp"
     app = mcp.streamable_http_app()
+    # Order matters: CORS runs first (handles preflights before auth), then
+    # BearerAuth validates the token on every non-health request.
+    app.add_middleware(BearerAuth)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=CORS_ORIGINS,
@@ -312,7 +320,13 @@ def main() -> None:
     )
     app.routes.append(Route("/health", health, methods=["GET"]))
     logger.info("Starting server on %s:%d", HOST, PORT)
-    uvicorn.run(app, host=HOST, port=PORT)
+    uvicorn.run(
+        app,
+        host=HOST,
+        port=PORT,
+        proxy_headers=True,
+        forwarded_allow_ips=FORWARDED_ALLOW_IPS,
+    )
 
 
 if __name__ == "__main__":
