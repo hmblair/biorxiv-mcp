@@ -76,14 +76,19 @@ claude mcp add --transport http --scope user biorxiv-mcp \
 Or, from a clone of this repo on any machine:
 
 ```sh
-make install \
-  MCP_URL=https://biorxiv-mcp.yourdomain.com/mcp \
-  MCP_AUTH="Bearer <your-key>"
+export BIORXIV_MCP_ENDPOINT=https://biorxiv-mcp.yourdomain.com
+export BIORXIV_MCP_ENDPOINT_KEY=<your-key>
+make install
 ```
 
 This registers the endpoint + auth header with Claude Code, Claude
 Desktop, and OpenCode in one shot. The client machine does not need
 the server installed — only `python3` and this repo.
+
+For a single trusted operator/agent that should bypass rate limiting,
+put the key in `BIORXIV_MCP_UNLIMITED_KEYS` instead of
+`BIORXIV_MCP_API_KEYS`. Unlimited keys are implicitly valid — no need
+to list them in both.
 
 Revoke a key by removing it from the env file and `make restart`.
 
@@ -100,6 +105,7 @@ automatically.
 | `TRANSPORT` | `http` | `http` (streamable HTTP) or `stdio` |
 | `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
 | `BIORXIV_MCP_API_KEYS` | *(unset)* | Comma-separated bearer tokens. Unset = open mode. |
+| `BIORXIV_MCP_UNLIMITED_KEYS` | *(unset)* | Bearer tokens that bypass rate limiting. Implicitly valid. |
 | `BIORXIV_MCP_KEY_RATE` | `1.0` | Per-key token refill (req/s) |
 | `BIORXIV_MCP_KEY_BURST` | `60` | Per-key bucket size |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Trusted proxy IPs for `X-Forwarded-For` |
@@ -113,6 +119,7 @@ biorxiv_mcp/
   server.py       # MCP tool handlers + FastMCP + Starlette app
   sync.py         # bioRxiv API client: bulk, delta, auto, resolve, pdf_url
   db.py           # SQLite schema, FTS5 index, connection management
+  auth.py         # Bearer-token middleware + per-key rate limiting
   ratelimit.py    # Token bucket rate limiter
   toolkit.py      # Shared tool decorator (rate limit, errors, envelope)
   sync_runner.py  # Standalone CLI sync entry point
@@ -122,15 +129,18 @@ deploy/
   biorxiv-sync.timer      # Daily schedule
   install_mcp.py          # Register with agent tools
   biorxiv-mcp.env.example # Env var reference
-tests/            # pytest suite (50 tests)
-Makefile          # install / service / start / stop / restart / status
+tests/            # pytest suite (unit + live endpoint tests)
+Makefile          # install / service / start / stop / restart / status / test
 ```
 
 ## Development
 
 ```sh
 uv pip install -e '.[test]'
-uv run pytest -q
+make test                        # unit tests
+BIORXIV_MCP_ENDPOINT=https://biorxiv-mcp.yourdomain.com \
+BIORXIV_MCP_ENDPOINT_KEY=<token> \
+make test-endpoint               # live tests against a deployed server
 ```
 
 ## License
