@@ -1,7 +1,9 @@
 VENV := $(CURDIR)/.venv
 PYTHON := $(VENV)/bin/python
 DEPLOY := $(CURDIR)/deploy
-SYSTEMD_USER_DIR := $(HOME)/.config/systemd/user
+SYSTEMD_DIR := /etc/systemd/system
+# User that the system service runs as (defaults to whoever ran `make`).
+RUN_USER ?= $(USER)
 SERVICE := biorxiv-mcp
 PORT ?= 8000
 MCP_URL ?= http://localhost:$(PORT)/mcp
@@ -15,35 +17,38 @@ install:
 uninstall:
 	$(PYTHON) $(DEPLOY)/install_mcp.py uninstall --name $(SERVICE)
 
+# install-service requires sudo to write under /etc/systemd/system.
 install-service: $(VENV)
-	sed 's|@PROJECT_ROOT@|$(CURDIR)|g' $(DEPLOY)/$(SERVICE).service.in > $(SYSTEMD_USER_DIR)/$(SERVICE).service
-	sed 's|@PROJECT_ROOT@|$(CURDIR)|g' $(DEPLOY)/biorxiv-sync.service.in > $(SYSTEMD_USER_DIR)/biorxiv-sync.service
-	cp $(DEPLOY)/biorxiv-sync.timer $(SYSTEMD_USER_DIR)/
-	systemctl --user daemon-reload
-	systemctl --user enable --now $(SERVICE).service
-	systemctl --user enable --now biorxiv-sync.timer
+	sed -e 's|@PROJECT_ROOT@|$(CURDIR)|g' -e 's|@RUN_USER@|$(RUN_USER)|g' \
+	    $(DEPLOY)/$(SERVICE).service.in | sudo tee $(SYSTEMD_DIR)/$(SERVICE).service > /dev/null
+	sed -e 's|@PROJECT_ROOT@|$(CURDIR)|g' -e 's|@RUN_USER@|$(RUN_USER)|g' \
+	    $(DEPLOY)/biorxiv-sync.service.in | sudo tee $(SYSTEMD_DIR)/biorxiv-sync.service > /dev/null
+	sudo cp $(DEPLOY)/biorxiv-sync.timer $(SYSTEMD_DIR)/
+	sudo systemctl daemon-reload
+	sudo systemctl enable --now $(SERVICE).service
+	sudo systemctl enable --now biorxiv-sync.timer
 	@echo ""
-	@systemctl --user status $(SERVICE).service --no-pager || true
+	@systemctl status $(SERVICE).service --no-pager || true
 
 uninstall-service:
-	systemctl --user disable --now $(SERVICE).service 2>/dev/null || true
-	systemctl --user disable --now biorxiv-sync.timer 2>/dev/null || true
-	rm -f $(SYSTEMD_USER_DIR)/$(SERVICE).service
-	rm -f $(SYSTEMD_USER_DIR)/biorxiv-sync.service
-	rm -f $(SYSTEMD_USER_DIR)/biorxiv-sync.timer
-	systemctl --user daemon-reload
+	sudo systemctl disable --now $(SERVICE).service 2>/dev/null || true
+	sudo systemctl disable --now biorxiv-sync.timer 2>/dev/null || true
+	sudo rm -f $(SYSTEMD_DIR)/$(SERVICE).service
+	sudo rm -f $(SYSTEMD_DIR)/biorxiv-sync.service
+	sudo rm -f $(SYSTEMD_DIR)/biorxiv-sync.timer
+	sudo systemctl daemon-reload
 
 start:
-	systemctl --user start $(SERVICE)
+	sudo systemctl start $(SERVICE)
 
 stop:
-	systemctl --user stop $(SERVICE)
+	sudo systemctl stop $(SERVICE)
 
 restart:
-	systemctl --user restart $(SERVICE)
+	sudo systemctl restart $(SERVICE)
 
 status:
-	@systemctl --user status $(SERVICE) --no-pager || true
+	@systemctl status $(SERVICE) --no-pager || true
 
 $(VENV):
 	python3 -m venv $(VENV)

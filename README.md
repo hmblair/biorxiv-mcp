@@ -24,14 +24,16 @@ and with no bioRxiv API rate-limit exposure during search.
 ## Install
 
 ```sh
-make              # create venv and install package in editable mode
-make install-service   # install systemd user units (server + daily sync timer)
-make install           # register the HTTP endpoint with Claude Code,
-                       # Claude Desktop, and OpenCode
+make                    # create venv and install package in editable mode
+make install-service    # install systemd system units (needs sudo)
+make install            # register the HTTP endpoint with Claude Code,
+                        # Claude Desktop, and OpenCode
 ```
 
-The server runs as a systemd user service at `http://localhost:8000/mcp`
+The server runs as a systemd system service at `http://localhost:8000/mcp`
 with a `/health` endpoint. The sync timer runs a delta sync daily at 04:00.
+The service runs as `$USER` by default; override with
+`make install-service RUN_USER=someone`.
 
 First run performs a bulk sync of the entire catalog (several hours).
 Subsequent syncs are fast deltas. You can trigger a sync manually:

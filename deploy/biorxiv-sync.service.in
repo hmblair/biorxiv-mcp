@@ -3,7 +3,10 @@ Description=bioRxiv database sync
 
 [Service]
 Type=oneshot
+User=@RUN_USER@
+Group=@RUN_USER@
 WorkingDirectory=@PROJECT_ROOT@
+EnvironmentFile=-@PROJECT_ROOT@/deploy/biorxiv-mcp.env
 ExecStart=@PROJECT_ROOT@/.venv/bin/biorxiv-mcp-sync
 # Bulk sync can take hours
 TimeoutStartSec=86400
