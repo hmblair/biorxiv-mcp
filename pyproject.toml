@@ -7,6 +7,13 @@ dependencies = ["mcp[cli]", "httpx", "uvicorn", "starlette", "sse-starlette"]
 [project.optional-dependencies]
 test = ["pytest", "pytest-asyncio"]
 
+[project.scripts]
+biorxiv-mcp = "biorxiv_mcp.server:main"
+biorxiv-mcp-sync = "biorxiv_mcp.sync_runner:main"
+
 [build-system]
 requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["biorxiv_mcp"]

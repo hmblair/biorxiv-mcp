@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from biorxiv_mcp import db, sync
+from . import db, sync
 
 logging.basicConfig(
     level=logging.INFO,
@@ -13,7 +13,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-async def main():
+async def _run() -> None:
     conn = db.get_connection()
     try:
         count = db.get_paper_count(conn)
@@ -26,5 +26,10 @@ async def main():
         conn.close()
 
 
+def main() -> None:
+    """Entry point for the ``biorxiv-mcp-sync`` console script."""
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

@@ -1,6 +1,6 @@
 VENV := $(CURDIR)/.venv
-PYTHON := $(VENV)/bin/python
-SERVER := $(CURDIR)/server.py
+BIN := $(VENV)/bin/biorxiv-mcp
+DEPLOY := $(CURDIR)/deploy
 OPENCODE_CONFIG := $(HOME)/.config/opencode/opencode.json
 SYSTEMD_USER_DIR := $(HOME)/.config/systemd/user
 SERVICE := biorxiv-mcp
@@ -9,12 +9,12 @@ SERVICE := biorxiv-mcp
 
 install: $(VENV)
 	claude mcp remove -s user $(SERVICE) 2>/dev/null || true
-	claude mcp add -s user $(SERVICE) -- $(PYTHON) $(SERVER)
+	claude mcp add -s user $(SERVICE) -- $(BIN)
 	@python3 -c '\
 import json; \
 f = "$(OPENCODE_CONFIG)"; \
 d = json.load(open(f)); \
-d.setdefault("mcp", {})["$(SERVICE)"] = {"type": "local", "command": ["$(PYTHON)", "$(SERVER)"]}; \
+d.setdefault("mcp", {})["$(SERVICE)"] = {"type": "local", "command": ["$(BIN)"]}; \
 json.dump(d, open(f, "w"), indent=2); \
 print("Added $(SERVICE) to opencode config")'
 
@@ -29,9 +29,9 @@ json.dump(d, open(f, "w"), indent=2); \
 print("Removed $(SERVICE) from opencode config")'
 
 install-service: $(VENV)
-	cp $(SERVICE).service $(SYSTEMD_USER_DIR)/
-	cp biorxiv-sync.service $(SYSTEMD_USER_DIR)/
-	cp biorxiv-sync.timer $(SYSTEMD_USER_DIR)/
+	cp $(DEPLOY)/$(SERVICE).service $(SYSTEMD_USER_DIR)/
+	cp $(DEPLOY)/biorxiv-sync.service $(SYSTEMD_USER_DIR)/
+	cp $(DEPLOY)/biorxiv-sync.timer $(SYSTEMD_USER_DIR)/
 	systemctl --user daemon-reload
 	systemctl --user enable --now $(SERVICE).service
 	systemctl --user enable --now biorxiv-sync.timer

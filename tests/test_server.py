@@ -10,7 +10,7 @@ from biorxiv_mcp import db
 
 # We need to import the tool functions from server, but they register with
 # FastMCP on import. Import them as regular functions via their module.
-import server as srv
+from biorxiv_mcp import server as srv
 
 
 @pytest.fixture(autouse=True)

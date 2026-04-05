@@ -11,9 +11,9 @@ from typing import TypedDict
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-from biorxiv_mcp import db, sync
-from biorxiv_mcp.ratelimit import TokenBucket
-from biorxiv_mcp.toolkit import tool, validate_date
+from . import db, sync
+from .ratelimit import TokenBucket
+from .toolkit import tool, validate_date
 
 # -- Logging ------------------------------------------------------------------
 
@@ -289,24 +289,29 @@ def health(request):
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point for the ``biorxiv-mcp`` console script."""
     if TRANSPORT == "stdio":
         mcp.run(transport="stdio")
-    else:
-        import uvicorn
-        from starlette.middleware.cors import CORSMiddleware
-        from starlette.routing import Route
+        return
+    import uvicorn
+    from starlette.middleware.cors import CORSMiddleware
+    from starlette.routing import Route
 
-        # Streamable HTTP (modern MCP transport, also supports SSE clients).
-        mcp.settings.streamable_http_path = "/mcp"
-        app = mcp.streamable_http_app()
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_methods=["*"],
-            allow_headers=["*"],
-            expose_headers=["mcp-session-id"],
-        )
-        app.routes.append(Route("/health", health, methods=["GET"]))
-        logger.info("Starting server on %s:%d", HOST, PORT)
-        uvicorn.run(app, host=HOST, port=PORT)
+    # Streamable HTTP (modern MCP transport, also supports SSE clients).
+    mcp.settings.streamable_http_path = "/mcp"
+    app = mcp.streamable_http_app()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["mcp-session-id"],
+    )
+    app.routes.append(Route("/health", health, methods=["GET"]))
+    logger.info("Starting server on %s:%d", HOST, PORT)
+    uvicorn.run(app, host=HOST, port=PORT)
+
+
+if __name__ == "__main__":
+    main()
