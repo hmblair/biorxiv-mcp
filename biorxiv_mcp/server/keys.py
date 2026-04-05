@@ -29,17 +29,29 @@ class ApiKey:
         return self.hash[:8]
 
 
-def generate(conn: sqlite3.Connection, label: str, unlimited: bool = False) -> str:
-    """Create a new API key. Returns the raw token (shown once, never stored)."""
-    raw = secrets.token_urlsafe(32)
-    h = hash_token(raw)
+def _insert(conn: sqlite3.Connection, h: str, label: str, unlimited: bool) -> None:
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         "INSERT INTO api_keys (hash, label, unlimited, created_at, disabled) VALUES (?, ?, ?, ?, 0)",
         (h, label, int(unlimited), now),
     )
     conn.commit()
+
+
+def generate(conn: sqlite3.Connection, label: str, unlimited: bool = False) -> str:
+    """Create a new API key. Returns the raw token (shown once, never stored)."""
+    raw = secrets.token_urlsafe(32)
+    _insert(conn, hash_token(raw), label, unlimited)
     return raw
+
+
+def import_token(conn: sqlite3.Connection, raw: str, label: str, unlimited: bool = False) -> str:
+    """Import an existing raw token into the database. Returns the key ID."""
+    h = hash_token(raw)
+    if conn.execute("SELECT 1 FROM api_keys WHERE hash = ?", (h,)).fetchone():
+        raise ValueError(f"Key already exists (key ID {h[:8]})")
+    _insert(conn, h, label, unlimited)
+    return h[:8]
 
 
 def list_keys(conn: sqlite3.Connection, include_disabled: bool = False) -> list[ApiKey]:

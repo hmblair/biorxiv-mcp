@@ -65,6 +65,19 @@ def _keys_list(args: argparse.Namespace) -> None:
     print()
 
 
+def _keys_import(args: argparse.Namespace) -> None:
+    from . import db, keys
+    conn = db.get_connection()
+    try:
+        key_id = keys.import_token(conn, raw=args.token, label=args.label, unlimited=args.unlimited)
+    except ValueError as e:
+        print(f"\n{e}\n")
+        sys.exit(1)
+    finally:
+        conn.close()
+    print(f"\n  Imported as key ID {key_id} (label: {args.label}, unlimited: {'yes' if args.unlimited else 'no'})\n")
+
+
 def _keys_revoke(args: argparse.Namespace) -> None:
     from . import db, keys
     conn = db.get_connection()
@@ -96,6 +109,11 @@ def main() -> None:
     list_p = keys_sub.add_parser("list", help="List all API keys")
     list_p.add_argument("--all", action="store_true", help="Include disabled keys")
 
+    import_p = keys_sub.add_parser("import", help="Import an existing token")
+    import_p.add_argument("--label", required=True, help="Human-readable label")
+    import_p.add_argument("--token", required=True, help="Raw bearer token to import")
+    import_p.add_argument("--unlimited", action="store_true", help="Bypass rate limiting")
+
     revoke_p = keys_sub.add_parser("revoke", help="Revoke an API key")
     revoke_p.add_argument("key_id", help="Key ID prefix (from 'keys list')")
 
@@ -106,6 +124,8 @@ def main() -> None:
     elif args.command == "keys":
         if args.keys_action == "add":
             _keys_add(args)
+        elif args.keys_action == "import":
+            _keys_import(args)
         elif args.keys_action == "list":
             _keys_list(args)
         elif args.keys_action == "revoke":
