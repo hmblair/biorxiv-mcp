@@ -13,6 +13,7 @@ def main() -> None:
         level=getattr(logging, log_level, logging.WARNING),
     )
     from .tools import mcp
+
     mcp.run(transport="stdio")
 
 

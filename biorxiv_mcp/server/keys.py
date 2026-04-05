@@ -21,6 +21,7 @@ def hash_token(raw: str) -> str:
 @dataclass(frozen=True, slots=True)
 class ApiKey:
     """An API key as stored in the database."""
+
     hash: str
     label: str
     unlimited: bool

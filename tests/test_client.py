@@ -1,11 +1,11 @@
 """Tests for the MCP tool wrappers (client side)."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from biorxiv_mcp.client.api import ApiError, BiorxivApi
 from biorxiv_mcp.client import tools
+from biorxiv_mcp.client.api import ApiError, BiorxivApi
 
 
 @pytest.fixture(autouse=True)

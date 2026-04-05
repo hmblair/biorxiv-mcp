@@ -17,7 +17,9 @@ from .api import ApiError, BiorxivApi
 
 logger = logging.getLogger(__name__)
 
-PAPERS_DIR = Path(os.environ.get("BIORXIV_MCP_PAPERS", Path.home() / ".local/share/biorxiv-mcp/papers"))
+PAPERS_DIR = Path(
+    os.environ.get("BIORXIV_MCP_PAPERS", Path.home() / ".local/share/biorxiv-mcp/papers")
+)
 
 mcp = FastMCP("biorxiv")
 
@@ -47,6 +49,7 @@ def _api_call(fn):
         except Exception as e:
             logger.exception("Unexpected error in %s", fn.__name__)
             return {"error": f"Connection error: {e}"}
+
     return wrapper
 
 
@@ -73,15 +76,23 @@ def search_biorxiv(
     Args:
         query: Search query (supports prefix matching and FTS5 syntax, e.g. "CRISPR AND cancer")
         limit: Max results to return (default 10, capped at 100)
-        category: Filter by category (e.g. "neuroscience", "genomics"). Use biorxiv_categories() to list available categories.
+        category: Filter by category (e.g. "neuroscience", "genomics").
+            Use biorxiv_categories() to list available categories.
         after: Only papers on or after this date (YYYY-MM-DD)
         before: Only papers on or before this date (YYYY-MM-DD)
         detail: If True, return all fields including abstract (default False)
         sort: "relevance" (default) or "date" (newest first)
     """
     api = _api()
-    results = api.search(query, limit=limit, category=category, after=after,
-                         before=before, detail=detail, sort=sort)
+    results = api.search(
+        query,
+        limit=limit,
+        category=category,
+        after=after,
+        before=before,
+        detail=detail,
+        sort=sort,
+    )
     if not results:
         status = api.status()
         count = status.get("paper_count", 0)

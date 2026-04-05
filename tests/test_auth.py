@@ -35,15 +35,18 @@ def _db(monkeypatch):
 
 
 def _app():
-    app = Starlette(routes=[
-        Route("/api/test", _ok, methods=["GET"]),
-        Route("/health", _ok, methods=["GET"]),
-    ])
+    app = Starlette(
+        routes=[
+            Route("/api/test", _ok, methods=["GET"]),
+            Route("/health", _ok, methods=["GET"]),
+        ]
+    )
     app.add_middleware(BearerAuth)
     return app
 
 
 # -- /health always unauthenticated ------------------------------------------
+
 
 def test_health_never_requires_auth(_db):
     keys.generate(_db, label="test")
@@ -52,6 +55,7 @@ def test_health_never_requires_auth(_db):
 
 
 # -- no keys = all requests rejected -----------------------------------------
+
 
 def test_no_keys_rejects(_db):
     client = TestClient(_app())
@@ -65,6 +69,7 @@ def test_no_keys_rejects_even_with_token(_db):
 
 
 # -- bearer token validation --------------------------------------------------
+
 
 def test_missing_token_returns_401(_db):
     keys.generate(_db, label="test")
@@ -97,6 +102,7 @@ def test_bearer_prefix_case_insensitive(_db):
 
 # -- key lifecycle (no restart needed) ----------------------------------------
 
+
 def test_new_key_works_immediately(_db):
     client = TestClient(_app())
     assert client.get("/api/test").status_code == 401
@@ -114,11 +120,14 @@ def test_deleted_key_rejected_immediately(_db):
 
 # -- unlimited keys -----------------------------------------------------------
 
+
 def test_unlimited_key_bypasses_rate_limit(_db, monkeypatch):
     monkeypatch.setenv("BIORXIV_MCP_KEY_RATE", "0")
     monkeypatch.setenv("BIORXIV_MCP_KEY_BURST", "1")
     import importlib
+
     from biorxiv_mcp.server import auth as auth_mod
+
     importlib.reload(auth_mod)
 
     raw = keys.generate(_db, label="admin", unlimited=True)
@@ -126,7 +135,9 @@ def test_unlimited_key_bypasses_rate_limit(_db, monkeypatch):
     app.add_middleware(auth_mod.BearerAuth)
     client = TestClient(app)
     for _ in range(3):
-        assert client.get("/api/test", headers={"Authorization": f"Bearer {raw}"}).status_code == 200
+        assert (
+            client.get("/api/test", headers={"Authorization": f"Bearer {raw}"}).status_code == 200
+        )
 
     monkeypatch.delenv("BIORXIV_MCP_KEY_RATE", raising=False)
     monkeypatch.delenv("BIORXIV_MCP_KEY_BURST", raising=False)
@@ -134,6 +145,7 @@ def test_unlimited_key_bypasses_rate_limit(_db, monkeypatch):
 
 
 # -- keys module --------------------------------------------------------------
+
 
 def test_generate_and_list(_db):
     keys.generate(_db, label="laptop", unlimited=True)

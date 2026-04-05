@@ -1,8 +1,5 @@
 """Tests for the token bucket rate limiter."""
 
-import time
-from unittest.mock import patch
-
 from biorxiv_mcp.server.ratelimit import TokenBucket
 
 

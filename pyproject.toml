@@ -6,6 +6,7 @@ dependencies = ["mcp[cli]", "httpx", "uvicorn", "starlette", "sse-starlette"]
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-asyncio"]
+dev = ["ruff", "mypy"]
 
 [project.scripts]
 # Client: stdio MCP server that proxies tools to the REST API.
@@ -21,3 +22,12 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["biorxiv_mcp*"]
+
+[tool.mypy]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

@@ -16,9 +16,20 @@ PAPERS_DIR = DB_DIR / "papers"
 # Authoritative list of paper fields, in schema order.
 # sync.py and upsert_papers derive column names from this.
 PAPER_FIELDS = (
-    "doi", "title", "authors", "abstract", "date", "category", "version",
-    "type", "license", "published", "author_corresponding",
-    "author_corresponding_institution", "jatsxml", "server",
+    "doi",
+    "title",
+    "authors",
+    "abstract",
+    "date",
+    "category",
+    "version",
+    "type",
+    "license",
+    "published",
+    "author_corresponding",
+    "author_corresponding_institution",
+    "jatsxml",
+    "server",
 )
 
 # Fields included in FTS index (must be a subset of PAPER_FIELDS).
@@ -92,8 +103,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     if id(conn) in _initialized_ids:
         return
     cols = ",\n            ".join(
-        f"{f} TEXT PRIMARY KEY" if f == "doi"
-        else f"{f} TEXT NOT NULL" if f == "title"
+        f"{f} TEXT PRIMARY KEY"
+        if f == "doi"
+        else f"{f} TEXT NOT NULL"
+        if f == "title"
         else f"{f} TEXT"
         for f in PAPER_FIELDS
     )
@@ -144,6 +157,7 @@ def upsert_papers(conn: sqlite3.Connection, papers: list[dict]) -> int:
     """Insert or replace papers. Returns number of papers upserted."""
     if not papers:
         return 0
+
     # Deduplicate by DOI within the batch, keeping the highest version.
     def _version(p: dict) -> int:
         v = p.get("version") or "0"
@@ -277,6 +291,7 @@ def search(
 
 # -- Single-paper lookup -----------------------------------------------------
 
+
 def get_paper(conn: sqlite3.Connection, doi: str) -> dict | None:
     """Get a paper by DOI."""
     row = conn.execute("SELECT * FROM papers WHERE doi = ?", (doi,)).fetchone()
@@ -284,6 +299,7 @@ def get_paper(conn: sqlite3.Connection, doi: str) -> dict | None:
 
 
 # -- Metadata ----------------------------------------------------------------
+
 
 def get_categories(conn: sqlite3.Connection) -> list[dict]:
     """Return all categories with paper counts, sorted by count descending."""
@@ -316,9 +332,7 @@ def _get_meta(conn: sqlite3.Connection, key: str) -> str | None:
 
 def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
     with _writer_lock:
-        conn.execute(
-            "INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?, ?)", (key, value)
-        )
+        conn.execute("INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?, ?)", (key, value))
         conn.commit()
 
 

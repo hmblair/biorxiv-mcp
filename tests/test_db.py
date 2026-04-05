@@ -81,20 +81,26 @@ def test_search_no_results(conn):
 
 
 def test_search_with_category_filter(conn):
-    db.upsert_papers(conn, [
-        _make_paper(doi="10.1101/001", title="Neuro paper", category="neuroscience"),
-        _make_paper(doi="10.1101/002", title="Neuro genomics", category="genomics"),
-    ])
+    db.upsert_papers(
+        conn,
+        [
+            _make_paper(doi="10.1101/001", title="Neuro paper", category="neuroscience"),
+            _make_paper(doi="10.1101/002", title="Neuro genomics", category="genomics"),
+        ],
+    )
     results = db.search(conn, "Neuro", category="neuroscience")
     assert len(results) == 1
     assert results[0]["category"] == "neuroscience"
 
 
 def test_search_with_date_filter(conn):
-    db.upsert_papers(conn, [
-        _make_paper(doi="10.1101/001", title="Old paper", date="2020-01-01"),
-        _make_paper(doi="10.1101/002", title="New paper", date="2024-06-01"),
-    ])
+    db.upsert_papers(
+        conn,
+        [
+            _make_paper(doi="10.1101/001", title="Old paper", date="2020-01-01"),
+            _make_paper(doi="10.1101/002", title="New paper", date="2024-06-01"),
+        ],
+    )
     results = db.search(conn, "paper", after="2024-01-01")
     assert len(results) == 1
     assert results[0]["date"] == "2024-06-01"
@@ -116,10 +122,13 @@ def test_search_compact_vs_detail(conn):
 
 
 def test_search_date_sort(conn):
-    db.upsert_papers(conn, [
-        _make_paper(doi="10.1101/001", title="Alpha paper", date="2020-01-01"),
-        _make_paper(doi="10.1101/002", title="Alpha recent", date="2024-06-01"),
-    ])
+    db.upsert_papers(
+        conn,
+        [
+            _make_paper(doi="10.1101/001", title="Alpha paper", date="2020-01-01"),
+            _make_paper(doi="10.1101/002", title="Alpha recent", date="2024-06-01"),
+        ],
+    )
     results = db.search(conn, "Alpha", sort="date")
     assert results[0]["date"] == "2024-06-01"
 
@@ -144,11 +153,14 @@ def test_get_paper_missing(conn):
 
 
 def test_get_categories(conn):
-    db.upsert_papers(conn, [
-        _make_paper(doi="10.1101/001", title="A", category="neuroscience"),
-        _make_paper(doi="10.1101/002", title="B", category="neuroscience"),
-        _make_paper(doi="10.1101/003", title="C", category="genomics"),
-    ])
+    db.upsert_papers(
+        conn,
+        [
+            _make_paper(doi="10.1101/001", title="A", category="neuroscience"),
+            _make_paper(doi="10.1101/002", title="B", category="neuroscience"),
+            _make_paper(doi="10.1101/003", title="C", category="genomics"),
+        ],
+    )
     cats = db.get_categories(conn)
     assert cats[0]["category"] == "neuroscience"
     assert cats[0]["count"] == 2
@@ -227,8 +239,8 @@ def test_search_empty_query_returns_no_results(conn):
 def test_connection_context_manager(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_DIR", tmp_path)
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    db._initialized_ids.clear()
     if hasattr(db._thread_local, "conn"):
-        db._initialized_ids.discard(id(db._thread_local.conn))
         del db._thread_local.conn
     with db.connection() as conn:
         assert conn is not None
@@ -238,8 +250,8 @@ def test_connection_context_manager(tmp_path, monkeypatch):
 def test_connection_reuses_per_thread_conn(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_DIR", tmp_path)
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    db._initialized_ids.clear()
     if hasattr(db._thread_local, "conn"):
-        db._initialized_ids.discard(id(db._thread_local.conn))
         del db._thread_local.conn
     with db.connection() as c1:
         pass

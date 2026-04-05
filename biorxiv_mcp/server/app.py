@@ -13,16 +13,14 @@ import os
 import re
 import sqlite3
 from datetime import datetime, timezone
-from typing import TypedDict
 
+import httpx
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
-
-import httpx
 
 from . import db, sync
 from .auth import BearerAuth
@@ -38,6 +36,7 @@ _CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",
 
 
 # -- Validation ---------------------------------------------------------------
+
 
 def _date(s: str | None, field: str) -> str | None:
     if s is None or s == "":
@@ -75,16 +74,13 @@ def _error(msg: str, status: int = 400) -> JSONResponse:
 
 # -- Background sync ----------------------------------------------------------
 
-class SyncState(TypedDict, total=False):
-    status: str
-    started_at: str | None
-    finished_at: str | None
-    error: str | None
-    last_result: dict
-
-
 _sync_task: asyncio.Task | None = None
-_sync_state: SyncState = {"status": "idle", "started_at": None, "finished_at": None, "error": None}
+_sync_state: dict = {
+    "status": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+}
 
 
 def _now() -> str:
@@ -105,14 +101,17 @@ async def _run_sync() -> None:
 
 # -- Route handlers -----------------------------------------------------------
 
+
 async def health(request: Request) -> Response:
     try:
         with db.connection() as conn:
-            return JSONResponse({
-                "status": "ok",
-                "paper_count": db.get_paper_count(conn),
-                "last_sync": db.get_last_sync_date(conn),
-            })
+            return JSONResponse(
+                {
+                    "status": "ok",
+                    "paper_count": db.get_paper_count(conn),
+                    "last_sync": db.get_last_sync_date(conn),
+                }
+            )
     except Exception as e:
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
 
@@ -132,8 +131,16 @@ async def search(request: Request) -> Response:
 
     try:
         with db.connection() as conn:
-            results = db.search(conn, query, limit=limit, category=category,
-                                after=after, before=before, detail=detail, sort=sort)
+            results = db.search(
+                conn,
+                query,
+                limit=limit,
+                category=category,
+                after=after,
+                before=before,
+                detail=detail,
+                sort=sort,
+            )
         return JSONResponse(results)
     except sqlite3.Error as e:
         logger.error("search db error: %s", e)
@@ -149,8 +156,13 @@ async def search_count(request: Request) -> Response:
         return _error(str(e))
     try:
         with db.connection() as conn:
-            n = db.search_count(conn, q.get("q", ""), category=q.get("category") or None,
-                                after=after, before=before)
+            n = db.search_count(
+                conn,
+                q.get("q", ""),
+                category=q.get("category") or None,
+                after=after,
+                before=before,
+            )
         return JSONResponse({"count": n})
     except sqlite3.Error as e:
         return _error(f"Database error: {e}", 500)
@@ -223,14 +235,16 @@ async def download_pdf(request: Request) -> Response:
 async def status_endpoint(request: Request) -> Response:
     try:
         with db.connection() as conn:
-            return JSONResponse({
-                "paper_count": db.get_paper_count(conn),
-                "last_sync": db.get_last_sync_date(conn),
-                "bulk_sync_cursor": db.get_bulk_sync_cursor(conn),
-                "db_size_mb": round(db.get_db_size_mb(), 2),
-                "db_path": str(db.DB_PATH),
-                "sync": dict(_sync_state),
-            })
+            return JSONResponse(
+                {
+                    "paper_count": db.get_paper_count(conn),
+                    "last_sync": db.get_last_sync_date(conn),
+                    "bulk_sync_cursor": db.get_bulk_sync_cursor(conn),
+                    "db_size_mb": round(db.get_db_size_mb(), 2),
+                    "db_path": str(db.DB_PATH),
+                    "sync": dict(_sync_state),
+                }
+            )
     except sqlite3.Error as e:
         return _error(f"Database error: {e}", 500)
 
@@ -247,16 +261,23 @@ async def start_sync(request: Request) -> Response:
 
 # -- Homepage -----------------------------------------------------------------
 
+
 def _render_homepage() -> str:
     """Render README.md to an HTML page at startup."""
     from pathlib import Path
+
     readme_path = Path(__file__).resolve().parent.parent.parent / "README.md"
     try:
         from markdown_it import MarkdownIt
+
         md = MarkdownIt()
         body = md.render(readme_path.read_text())
     except Exception:
-        body = f"<pre>{readme_path.read_text()}</pre>" if readme_path.exists() else "<p>biorxiv-mcp</p>"
+        body = (
+            f"<pre>{readme_path.read_text()}</pre>"
+            if readme_path.exists()
+            else "<p>biorxiv-mcp</p>"
+        )
     return (
         "<!doctype html><html><head>"
         '<meta charset="utf-8">'
@@ -287,10 +308,12 @@ async def homepage(request: Request) -> Response:
     if _HOMEPAGE_HTML is None:
         _HOMEPAGE_HTML = _render_homepage()
     from starlette.responses import HTMLResponse
+
     return HTMLResponse(_HOMEPAGE_HTML)
 
 
 # -- App factory --------------------------------------------------------------
+
 
 def create_app() -> Starlette:
     routes = [

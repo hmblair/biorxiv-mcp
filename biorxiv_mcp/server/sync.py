@@ -20,6 +20,8 @@ DEFAULT_SERVER = "biorxiv"
 def pdf_url(doi: str, server: str = DEFAULT_SERVER, version: str | int = 1) -> str:
     """Construct the public PDF URL for a paper."""
     return f"https://www.{server}.org/content/{doi}v{version}.full.pdf"
+
+
 PAGE_SIZE = 100
 MAX_RETRIES = 5
 RETRY_DELAY = 10  # seconds
@@ -42,8 +44,10 @@ async def fetch_page(
         except Exception as e:
             last_exc = e
             if attempt < MAX_RETRIES - 1:
-                wait = RETRY_DELAY * (2 ** attempt)
-                logger.warning(f"Retry {attempt + 1}/{MAX_RETRIES} for {url}: {e} (waiting {wait}s)")
+                wait = RETRY_DELAY * (2**attempt)
+                logger.warning(
+                    f"Retry {attempt + 1}/{MAX_RETRIES} for {url}: {e} (waiting {wait}s)"
+                )
                 await asyncio.sleep(wait)
     assert last_exc is not None
     raise last_exc
@@ -85,9 +89,7 @@ async def fetch_range(
             break
 
 
-async def _sync_interval(
-    client: httpx.AsyncClient, conn, server: str, start: str, end: str
-) -> int:
+async def _sync_interval(client: httpx.AsyncClient, conn, server: str, start: str, end: str) -> int:
     """Sync a single date interval. Returns paper count."""
     count = 0
     async for page in fetch_range(client, server, start, end):
@@ -101,7 +103,9 @@ async def bulk_sync(conn, progress_callback=None) -> int:
     start_date = date(2013, 1, 1)
     if cursor:
         start_date = datetime.strptime(cursor, "%Y-%m-%d").date() + timedelta(days=1)
-        logger.info(f"Resuming bulk sync from {start_date} ({db.get_paper_count(conn)} papers in db)")
+        logger.info(
+            f"Resuming bulk sync from {start_date} ({db.get_paper_count(conn)} papers in db)"
+        )
 
     today = date.today()
     intervals = []

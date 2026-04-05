@@ -30,19 +30,20 @@ def _serve() -> None:
     forwarded = os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1")
 
     from .app import create_app
+
     app = create_app()
 
     logging.getLogger(__name__).info("Starting server on %s:%d", host, port)
-    uvicorn.run(app, host=host, port=port, proxy_headers=True,
-                forwarded_allow_ips=forwarded)
+    uvicorn.run(app, host=host, port=port, proxy_headers=True, forwarded_allow_ips=forwarded)
 
 
 def _keys_add(args: argparse.Namespace) -> None:
     from . import db, keys
+
     conn = db.get_connection()
     raw = keys.generate(conn, label=args.label, unlimited=args.unlimited)
     conn.close()
-    print(f"\nKey created. Save it now — it will not be shown again.\n")
+    print("\nKey created. Save it now — it will not be shown again.\n")
     print(f"  Token:     {raw}")
     print(f"  Label:     {args.label}")
     print(f"  Unlimited: {'yes' if args.unlimited else 'no'}")
@@ -52,6 +53,7 @@ def _keys_add(args: argparse.Namespace) -> None:
 
 def _keys_import(args: argparse.Namespace) -> None:
     from . import db, keys
+
     conn = db.get_connection()
     try:
         key_id = keys.import_token(conn, raw=args.token, label=args.label, unlimited=args.unlimited)
@@ -60,26 +62,37 @@ def _keys_import(args: argparse.Namespace) -> None:
         sys.exit(1)
     finally:
         conn.close()
-    print(f"\n  Imported as key ID {key_id} (label: {args.label}, unlimited: {'yes' if args.unlimited else 'no'})\n")
+    print(
+        f"\n  Imported as key ID {key_id}"
+        f" (label: {args.label},"
+        f" unlimited: {'yes' if args.unlimited else 'no'})\n"
+    )
 
 
 def _keys_list(args: argparse.Namespace) -> None:
     from . import db, keys
+
     conn = db.get_connection()
     all_keys = keys.list_keys(conn)
     conn.close()
     if not all_keys:
-        print("\nNo API keys configured. Create one with:\n  biorxiv-mcp-server keys add --label <name>\n")
+        print(
+            "\nNo API keys configured. Create one with:\n"
+            "  biorxiv-mcp-server keys add --label <name>\n"
+        )
         return
     print(f"\n{'ID':<10} {'Label':<25} {'Unlimited':<11} {'Created'}")
     print("-" * 68)
     for k in all_keys:
-        print(f"{k.key_id:<10} {k.label:<25} {'yes' if k.unlimited else 'no':<11} {k.created_at[:19]}")
+        print(
+            f"{k.key_id:<10} {k.label:<25} {'yes' if k.unlimited else 'no':<11} {k.created_at[:19]}"
+        )
     print()
 
 
 def _keys_delete(args: argparse.Namespace) -> None:
     from . import db, keys
+
     conn = db.get_connection()
     key = keys.delete(conn, args.key_id)
     conn.close()
@@ -100,7 +113,9 @@ def main() -> None:
     keys_sub = keys_parser.add_subparsers(dest="keys_action")
 
     add_p = keys_sub.add_parser("add", help="Generate a new API key")
-    add_p.add_argument("--label", required=True, help="Human-readable label (e.g. 'hamish-macbook')")
+    add_p.add_argument(
+        "--label", required=True, help="Human-readable label (e.g. 'hamish-macbook')"
+    )
     add_p.add_argument("--unlimited", action="store_true", help="Bypass rate limiting")
 
     import_p = keys_sub.add_parser("import", help="Import an existing token")

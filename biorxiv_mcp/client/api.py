@@ -7,6 +7,8 @@ and server message.
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 
 
@@ -35,19 +37,27 @@ class BiorxivApi:
     def close(self) -> None:
         self._client.close()
 
-    def _get(self, path: str, **params) -> dict | list:
+    def _get(self, path: str, **params: Any) -> Any:
         # Drop None-valued params so the server sees them as absent.
         params = {k: v for k, v in params.items() if v is not None}
         r = self._client.get(path, params=params)
         if r.status_code >= 400:
-            detail = r.json().get("error", r.text) if r.headers.get("content-type", "").startswith("application/json") else r.text
+            detail = (
+                r.json().get("error", r.text)
+                if r.headers.get("content-type", "").startswith("application/json")
+                else r.text
+            )
             raise ApiError(r.status_code, detail)
         return r.json()
 
-    def _post(self, path: str) -> dict:
+    def _post(self, path: str) -> Any:
         r = self._client.post(path)
         if r.status_code >= 400:
-            detail = r.json().get("error", r.text) if r.headers.get("content-type", "").startswith("application/json") else r.text
+            detail = (
+                r.json().get("error", r.text)
+                if r.headers.get("content-type", "").startswith("application/json")
+                else r.text
+            )
             raise ApiError(r.status_code, detail)
         return r.json()
 
@@ -84,7 +94,9 @@ class BiorxivApi:
         after: str | None = None,
         before: str | None = None,
     ) -> dict:
-        return self._get("/api/search/count", q=query, category=category, after=after, before=before)
+        return self._get(
+            "/api/search/count", q=query, category=category, after=after, before=before
+        )
 
     def categories(self) -> list[dict]:
         return self._get("/api/categories")

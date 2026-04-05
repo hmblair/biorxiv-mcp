@@ -20,8 +20,10 @@ async def _run() -> None:
         last = db.get_last_sync_date(conn)
         log.info(f"{'Delta' if last else 'Bulk'} sync starting ({count} papers in db)")
         result = await sync.auto_sync(conn)
-        log.info(f"{result['kind']} sync complete — {result['count']} papers, "
-                 f"{db.get_paper_count(conn)} total")
+        log.info(
+            f"{result['kind']} sync complete — {result['count']} papers, "
+            f"{db.get_paper_count(conn)} total"
+        )
     finally:
         conn.close()
 
