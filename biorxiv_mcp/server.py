@@ -10,6 +10,7 @@ from typing import TypedDict
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from . import db, sync
 from .auth import BearerAuth, load_keys
@@ -55,7 +56,13 @@ CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(","
 # appropriate for a reverse proxy (Caddy, cloudflared) on the same host.
 FORWARDED_ALLOW_IPS = os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1")
 
-mcp = FastMCP("biorxiv", host=HOST, port=PORT)
+# The backend serves MCP on localhost and is unaware of whatever public
+# hostname a reverse proxy terminates TLS on. Disable FastMCP's
+# DNS-rebinding Host-header check: the attack it guards against is
+# already prevented by binding to 127.0.0.1 and requiring bearer auth.
+_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+mcp = FastMCP("biorxiv", host=HOST, port=PORT, transport_security=_security)
 
 
 @mcp.tool()
