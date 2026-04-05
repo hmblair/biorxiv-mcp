@@ -80,7 +80,7 @@ If `biorxiv-mcp` isn't listed or shows an error, re-run `make install`.
 
 ## Server administration
 
-If you're running the backend, see [deploy/SERVER.md](deploy/SERVER.md).
+If you're running the backend, see [Server administration](https://github.com/hmblair/biorxiv-mcp/blob/main/deploy/SERVER.md).
 
 ## License
 
