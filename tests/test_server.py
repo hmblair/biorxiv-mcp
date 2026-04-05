@@ -147,7 +147,7 @@ def test_sync_rate_limit():
     srv._sync_bucket._tokens = 0
 
     import asyncio
-    result = asyncio.get_event_loop().run_until_complete(srv.sync_biorxiv())
+    result = asyncio.run(srv.sync_biorxiv())
     assert "Rate limit" in result["error"]
 
 
