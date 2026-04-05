@@ -41,6 +41,8 @@ _initialized_ids: set[int] = set()
 def get_connection() -> sqlite3.Connection:
     """Create a new SQLite connection with WAL + pragmas and init schema."""
     DB_DIR.mkdir(parents=True, exist_ok=True)
+    # Restrict directory to owner-only: the DB contains API key hashes.
+    DB_DIR.chmod(0o700)
     try:
         conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     except sqlite3.OperationalError as e:
@@ -50,6 +52,9 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     init_db(conn)
+    # Restrict DB file to owner-only after creation.
+    if DB_PATH.exists():
+        DB_PATH.chmod(0o600)
     logger.debug("Opened database connection to %s", DB_PATH)
     return conn
 
