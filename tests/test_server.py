@@ -25,7 +25,7 @@ def mock_db(tmp_path, monkeypatch):
     """Provide an in-memory DB via the db.connection() context manager."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    db._initialized.discard(id(conn))
+    db._initialized_ids.discard(id(conn))
     db.init_db(conn)
 
     from contextlib import contextmanager
@@ -155,3 +155,32 @@ def test_get_paper_rate_limit():
     srv._search_bucket._tokens = 0
     result = srv.get_paper("10.1101/test")
     assert "Rate limit" in result["error"]
+
+
+# -- input validation ---------------------------------------------------------
+
+
+def test_search_bad_date(mock_db):
+    result = srv.search_biorxiv("x", after="not-a-date")
+    assert "error" in result[0]
+    assert "YYYY-MM-DD" in result[0]["error"]
+
+
+def test_search_caps_limit(mock_db):
+    papers = [_make_paper(doi=f"10.1101/{i:04d}", title="Common term") for i in range(5)]
+    db.upsert_papers(mock_db, papers)
+    # 10_000 should be silently capped to MAX_SEARCH_LIMIT.
+    results = srv.search_biorxiv("Common", limit=10_000)
+    assert len(results) <= srv.MAX_SEARCH_LIMIT
+
+
+def test_get_paper_bad_doi(mock_db):
+    result = srv.get_paper("not-a-doi")
+    assert "error" in result
+    assert "Invalid DOI" in result["error"]
+
+
+def test_download_paper_bad_doi(mock_db):
+    result = srv.download_paper("../etc/passwd")
+    assert "error" in result
+    assert "Invalid DOI" in result["error"]

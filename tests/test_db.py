@@ -12,10 +12,10 @@ def conn():
     """In-memory SQLite connection with schema initialized."""
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
-    # Clear the init cache so init_db actually runs for this connection.
-    db._initialized.discard(id(c))
+    db._initialized_ids.discard(id(c))
     db.init_db(c)
     yield c
+    db._initialized_ids.discard(id(c))
     c.close()
 
 
@@ -202,24 +202,43 @@ def test_prefix_matching_skips_already_prefixed():
     assert db._add_prefix_matching("CRISPR*") == "CRISPR*"
 
 
+def test_prefix_matching_strips_punctuation():
+    # Hyphens, parens, colons get stripped; tokens re-split.
+    assert db._add_prefix_matching("mRNA-seq") == "mRNA* seq*"
+    assert db._add_prefix_matching("(CRISPR)") == "CRISPR*"
+    assert db._add_prefix_matching("foo:bar") == "foo* bar*"
+
+
+def test_search_handles_punctuation(conn):
+    db.upsert_papers(conn, [_make_paper(title="mRNA sequencing analysis")])
+    # Previously this would raise sqlite3.OperationalError.
+    results = db.search(conn, "mRNA-seq")
+    assert len(results) == 1
+
+
+def test_search_empty_query_returns_no_results(conn):
+    db.upsert_papers(conn, [_make_paper(title="Anything")])
+    assert db.search(conn, "()") == []
+
+
 # -- connection context manager ------------------------------------------------
 
 
 def test_connection_context_manager(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_DIR", tmp_path)
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
-    monkeypatch.setattr(db, "_shared_conn", None)
-    db._initialized.clear()
+    if hasattr(db._thread_local, "conn"):
+        del db._thread_local.conn
     with db.connection() as conn:
         assert conn is not None
         db.get_paper_count(conn)  # should work
 
 
-def test_connection_reuses_shared_conn(tmp_path, monkeypatch):
+def test_connection_reuses_per_thread_conn(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_DIR", tmp_path)
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
-    monkeypatch.setattr(db, "_shared_conn", None)
-    db._initialized.clear()
+    if hasattr(db._thread_local, "conn"):
+        del db._thread_local.conn
     with db.connection() as c1:
         pass
     with db.connection() as c2:

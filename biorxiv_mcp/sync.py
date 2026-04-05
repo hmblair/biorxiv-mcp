@@ -14,6 +14,12 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.biorxiv.org/details"
 SERVERS = ("biorxiv", "medrxiv")
+DEFAULT_SERVER = "biorxiv"
+
+
+def pdf_url(doi: str, server: str = DEFAULT_SERVER, version: str | int = 1) -> str:
+    """Construct the public PDF URL for a paper."""
+    return f"https://www.{server}.org/content/{doi}v{version}.full.pdf"
 PAGE_SIZE = 100
 MAX_RETRIES = 5
 RETRY_DELAY = 10  # seconds
@@ -24,6 +30,7 @@ async def fetch_page(
 ) -> dict:
     """Fetch a single page from the bioRxiv API with retries."""
     url = f"{BASE_URL}/{server}/{start}/{end}/{cursor}/json"
+    last_exc: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
             resp = await client.get(url, timeout=90)
@@ -33,12 +40,13 @@ async def fetch_page(
                 raise ValueError(f"Unexpected API response: {list(data.keys())}")
             return data
         except Exception as e:
+            last_exc = e
             if attempt < MAX_RETRIES - 1:
                 wait = RETRY_DELAY * (2 ** attempt)
                 logger.warning(f"Retry {attempt + 1}/{MAX_RETRIES} for {url}: {e} (waiting {wait}s)")
                 await asyncio.sleep(wait)
-            else:
-                raise
+    assert last_exc is not None
+    raise last_exc
 
 
 def normalize_paper(paper: dict, server: str) -> dict:
@@ -127,6 +135,29 @@ async def bulk_sync(conn, progress_callback=None) -> int:
     db.set_last_sync_date(conn, today.isoformat())
     db.clear_bulk_sync_cursor(conn)
     return db.get_paper_count(conn)
+
+
+async def auto_sync(conn) -> dict:
+    """Run delta sync if the DB has been synced before, otherwise bulk sync.
+
+    Returns a dict describing the run: ``{"kind": "delta"|"bulk", "count": N}``.
+    """
+    if db.get_last_sync_date(conn):
+        count = await delta_sync(conn)
+        return {"kind": "delta", "count": count}
+    count = await bulk_sync(conn)
+    return {"kind": "bulk", "count": count}
+
+
+def resolve_paper(conn, doi: str) -> dict | None:
+    """Look up a paper locally, falling back to the bioRxiv API."""
+    paper = db.get_paper(conn, doi)
+    if paper:
+        return paper
+    api_paper = fetch_paper_by_doi(doi)
+    if api_paper:
+        api_paper["_source"] = "api"
+    return api_paper
 
 
 async def delta_sync(conn) -> int:
