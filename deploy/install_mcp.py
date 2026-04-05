@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Register/unregister the biorxiv-mcp HTTP endpoint with agent tools.
+"""Register/unregister the biorxiv-mcp stdio shim with agent tools.
 
-Targets Claude Code (via the ``claude`` CLI), Claude Desktop (via
-``claude_desktop_config.json``), and OpenCode (via ``opencode.json``).
+The shim is a local stdio process that proxies MCP tool calls to a
+remote REST API. Two env vars configure it at runtime:
+
+    BIORXIV_API_URL   — base URL of the server (e.g. https://biorxiv.example.com)
+    BIORXIV_API_KEY   — bearer token (optional for localhost)
 
 Usage:
-    install_mcp.py install [--url ...] [--name ...] [--auth "Bearer <key>"]
+    install_mcp.py install [--url ...] [--key ...] [--name ...]
     install_mcp.py uninstall [--name biorxiv-mcp]
 """
 
@@ -13,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -41,19 +45,56 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def _auth_headers(auth: str | None) -> dict[str, str]:
-    return {"Authorization": auth} if auth else {}
+def _find_shim() -> str:
+    """Find the biorxiv-mcp entry point on PATH or in the local venv."""
+    venv = Path(__file__).resolve().parent.parent / ".venv/bin/biorxiv-mcp"
+    if venv.exists():
+        return str(venv)
+    found = shutil.which("biorxiv-mcp")
+    if found:
+        return found
+    return "biorxiv-mcp"  # hope it's on PATH at runtime
+
+
+def _env_dict(url: str, key: str | None) -> dict[str, str]:
+    env = {"BIORXIV_API_URL": url}
+    if key:
+        env["BIORXIV_API_KEY"] = key
+    return env
+
+
+def _preflight(url: str, key: str | None) -> bool:
+    """Quick check that the server is reachable."""
+    import urllib.request
+    import urllib.error
+
+    health_url = url.rstrip("/") + "/health"
+    req = urllib.request.Request(health_url)
+    if key:
+        req.add_header("Authorization", f"Bearer {key}")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+            count = data.get("paper_count", "?")
+            print(f"  Server healthy: {count} papers, last sync {data.get('last_sync', '?')}")
+            return True
+    except urllib.error.HTTPError as e:
+        print(f"  WARNING: /health returned HTTP {e.code}")
+        return False
+    except Exception as e:
+        print(f"  WARNING: cannot reach {health_url}: {e}")
+        return False
 
 
 # -- Claude Code --------------------------------------------------------------
 
-def install_claude_code(name: str, url: str, auth: str | None) -> None:
+def install_claude_code(name: str, shim: str, env: dict) -> None:
     subprocess.run(["claude", "mcp", "remove", "--scope", "user", name],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    cmd = ["claude", "mcp", "add", "--transport", "http", "--scope", "user"]
-    if auth:
-        cmd += ["--header", f"Authorization: {auth}"]
-    cmd += [name, url]
+    cmd = ["claude", "mcp", "add", "--scope", "user"]
+    for k, v in env.items():
+        cmd += ["-e", f"{k}={v}"]
+    cmd += [name, "--", shim]
     try:
         subprocess.run(cmd, check=True)
         print(f"  Added {name} to Claude Code")
@@ -70,16 +111,16 @@ def uninstall_claude_code(name: str) -> None:
 
 # -- Claude Desktop -----------------------------------------------------------
 
-def install_claude_desktop(name: str, url: str, auth: str | None) -> None:
+def install_claude_desktop(name: str, shim: str, env: dict) -> None:
     if not CLAUDE_DESKTOP.parent.exists():
         print(f"  Claude Desktop config dir not found; skipping ({CLAUDE_DESKTOP.parent})")
         return
     config = _read_json(CLAUDE_DESKTOP)
-    entry: dict = {"url": url}
-    headers = _auth_headers(auth)
-    if headers:
-        entry["headers"] = headers
-    config.setdefault("mcpServers", {})[name] = entry
+    config.setdefault("mcpServers", {})[name] = {
+        "command": shim,
+        "args": [],
+        "env": env,
+    }
     _write_json(CLAUDE_DESKTOP, config)
     print(f"  Added {name} to {CLAUDE_DESKTOP}")
 
@@ -93,13 +134,14 @@ def uninstall_claude_desktop(name: str) -> None:
 
 # -- OpenCode -----------------------------------------------------------------
 
-def install_opencode(name: str, url: str, auth: str | None) -> None:
+def install_opencode(name: str, shim: str, env: dict) -> None:
     config = _read_json(OPENCODE) or {"$schema": "https://opencode.ai/config.json"}
-    entry: dict = {"type": "remote", "url": url, "enabled": True}
-    headers = _auth_headers(auth)
-    if headers:
-        entry["headers"] = headers
-    config.setdefault("mcp", {})[name] = entry
+    config.setdefault("mcp", {})[name] = {
+        "type": "local",
+        "command": [shim],
+        "env": env,
+        "enabled": True,
+    }
     _write_json(OPENCODE, config)
     print(f"  Added {name} to {OPENCODE}")
 
@@ -114,23 +156,34 @@ def uninstall_opencode(name: str) -> None:
 # -- CLI ----------------------------------------------------------------------
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("action", choices=["install", "uninstall"])
     parser.add_argument("--name", default="biorxiv-mcp")
-    parser.add_argument("--url", default="http://localhost:8000/mcp")
-    parser.add_argument(
-        "--auth",
-        default=None,
-        help='Full Authorization header value, e.g. "Bearer <token>". '
-             "Omit for localhost deployments.",
-    )
+    parser.add_argument("--url", default=None,
+                        help="API base URL (default: $BIORXIV_API_URL or http://localhost:8000)")
+    parser.add_argument("--key", default=None,
+                        help="API bearer token (default: $BIORXIV_API_KEY)")
     args = parser.parse_args()
 
     print()
     if args.action == "install":
-        install_claude_code(args.name, args.url, args.auth)
-        install_claude_desktop(args.name, args.url, args.auth)
-        install_opencode(args.name, args.url, args.auth)
+        url = args.url or "http://localhost:8000"
+        key = args.key or ""
+        shim = _find_shim()
+
+        print(f"  Endpoint: {url}")
+        print(f"  Auth:     {'configured' if key else 'none (localhost mode)'}")
+        print(f"  Shim:     {shim}")
+        print()
+
+        _preflight(url, key or None)
+        print()
+
+        env = _env_dict(url, key or None)
+        install_claude_code(args.name, shim, env)
+        install_claude_desktop(args.name, shim, env)
+        install_opencode(args.name, shim, env)
     else:
         uninstall_claude_code(args.name)
         uninstall_claude_desktop(args.name)

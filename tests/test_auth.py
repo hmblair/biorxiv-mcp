@@ -5,7 +5,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from biorxiv_mcp.auth import ApiKey, BearerAuth, hash_token, load_keys
+from biorxiv_mcp.server.auth import ApiKey, BearerAuth, hash_token, load_keys
 
 
 def _ok(request):
@@ -126,7 +126,7 @@ def test_per_key_rate_limit(monkeypatch):
     monkeypatch.setenv("BIORXIV_MCP_KEY_RATE", "0")
     monkeypatch.setenv("BIORXIV_MCP_KEY_BURST", "2")
     import importlib
-    from biorxiv_mcp import auth as auth_mod
+    from biorxiv_mcp.server import auth as auth_mod
     importlib.reload(auth_mod)
 
     app = Starlette(routes=[Route("/mcp", _ok, methods=["GET"])])
@@ -151,7 +151,7 @@ def test_unlimited_key_bypasses_rate_limit(monkeypatch):
     monkeypatch.setenv("BIORXIV_MCP_KEY_RATE", "0")
     monkeypatch.setenv("BIORXIV_MCP_KEY_BURST", "1")
     import importlib
-    from biorxiv_mcp import auth as auth_mod
+    from biorxiv_mcp.server import auth as auth_mod
     importlib.reload(auth_mod)
 
     h = auth_mod.hash_token("admin")

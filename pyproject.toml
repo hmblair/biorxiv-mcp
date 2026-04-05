@@ -1,6 +1,6 @@
 [project]
 name = "biorxiv-mcp"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.10"
 dependencies = ["mcp[cli]", "httpx", "uvicorn", "starlette", "sse-starlette"]
 
@@ -8,12 +8,16 @@ dependencies = ["mcp[cli]", "httpx", "uvicorn", "starlette", "sse-starlette"]
 test = ["pytest", "pytest-asyncio"]
 
 [project.scripts]
-biorxiv-mcp = "biorxiv_mcp.server:main"
-biorxiv-mcp-sync = "biorxiv_mcp.sync_runner:main"
+# Client: stdio MCP server that proxies tools to the REST API.
+biorxiv-mcp = "biorxiv_mcp.client.main:main"
+# Server: REST API serving the local SQLite index.
+biorxiv-mcp-server = "biorxiv_mcp.server.main:main"
+# Admin: standalone sync runner.
+biorxiv-mcp-sync = "biorxiv_mcp.server.sync_runner:main"
 
 [build-system]
 requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["biorxiv_mcp"]
+[tool.setuptools.packages.find]
+include = ["biorxiv_mcp*"]

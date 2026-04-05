@@ -2,34 +2,28 @@ VENV := $(CURDIR)/.venv
 PYTHON := $(VENV)/bin/python
 DEPLOY := $(CURDIR)/deploy
 SYSTEMD_DIR := /etc/systemd/system
-# User that the system service runs as (defaults to whoever ran `make`).
 RUN_USER ?= $(USER)
 SERVICE := biorxiv-mcp
-PORT ?= 8000
 
-# BIORXIV_MCP_ENDPOINT (e.g. https://biorxiv.example.com) is the single
-# source of truth for the deployed URL. If set, it drives both client
-# registration and the live endpoint tests. Falls back to localhost.
-ENDPOINT ?= $(BIORXIV_MCP_ENDPOINT)
-MCP_URL ?= $(if $(ENDPOINT),$(ENDPOINT)/mcp,http://localhost:$(PORT)/mcp)
-# Bearer token used for registration + tests. Defaults to the env var.
-ENDPOINT_KEY ?= $(BIORXIV_MCP_ENDPOINT_KEY)
-MCP_AUTH ?= $(if $(ENDPOINT_KEY),Bearer $(ENDPOINT_KEY),)
+# Client env: where the REST API lives and how to authenticate.
+BIORXIV_API_URL ?= $(if $(BIORXIV_MCP_ENDPOINT),$(BIORXIV_MCP_ENDPOINT),http://localhost:8000)
+BIORXIV_API_KEY ?= $(BIORXIV_MCP_ENDPOINT_KEY)
 
 .PHONY: install uninstall install-service uninstall-service start stop restart status test test-endpoint
 
-# Register the MCP with Claude Code, Claude Desktop, and OpenCode.
-# Local server:    make install
-# Remote server:   BIORXIV_MCP_ENDPOINT=https://biorxiv.example.com \
-#                  BIORXIV_MCP_ENDPOINT_KEY=<token> make install
+# Register the stdio MCP shim with Claude Code, Claude Desktop, and OpenCode.
+# Local:   make install
+# Remote:  BIORXIV_MCP_ENDPOINT=https://biorxiv.example.com \
+#          BIORXIV_MCP_ENDPOINT_KEY=<token> make install
 install:
-	python3 $(DEPLOY)/install_mcp.py install --name $(SERVICE) --url $(MCP_URL) \
-	    $(if $(MCP_AUTH),--auth "$(MCP_AUTH)",)
+	python3 $(DEPLOY)/install_mcp.py install \
+	    --url "$(BIORXIV_API_URL)" \
+	    $(if $(BIORXIV_API_KEY),--key "$(BIORXIV_API_KEY)",)
 
 uninstall:
-	python3 $(DEPLOY)/install_mcp.py uninstall --name $(SERVICE)
+	python3 $(DEPLOY)/install_mcp.py uninstall
 
-# install-service requires sudo to write under /etc/systemd/system.
+# Server-side: install systemd units (needs sudo).
 install-service: $(VENV)
 	sed -e 's|@PROJECT_ROOT@|$(CURDIR)|g' -e 's|@RUN_USER@|$(RUN_USER)|g' \
 	    $(DEPLOY)/$(SERVICE).service.in | sudo tee $(SYSTEMD_DIR)/$(SERVICE).service > /dev/null
@@ -65,10 +59,8 @@ status:
 test: $(VENV)
 	$(VENV)/bin/pytest -q
 
-# Live endpoint tests; require BIORXIV_MCP_ENDPOINT (and optionally
-# BIORXIV_MCP_ENDPOINT_KEY) in the environment.
 test-endpoint: $(VENV)
-	BIORXIV_MCP_ENDPOINT="$(ENDPOINT)" BIORXIV_MCP_ENDPOINT_KEY="$(ENDPOINT_KEY)" \
+	BIORXIV_MCP_ENDPOINT="$(BIORXIV_API_URL)" BIORXIV_MCP_ENDPOINT_KEY="$(BIORXIV_API_KEY)" \
 	    $(VENV)/bin/pytest -v tests/test_endpoint.py
 
 $(VENV):

@@ -4,133 +4,159 @@ An [MCP](https://modelcontextprotocol.io) server that lets agents search,
 read, and download [bioRxiv](https://www.biorxiv.org) and
 [medRxiv](https://www.medrxiv.org) preprints from a local SQLite FTS5 index.
 
-A background job syncs the full bioRxiv/medRxiv catalog (roughly 400k
-papers from 2013 onward) into `~/.local/share/biorxiv-mcp/biorxiv.db`.
-Agent queries run entirely against the local index — fast, deterministic,
-and with no bioRxiv API rate-limit exposure during search.
+## Architecture
+
+```
+Agent (Claude Code, etc.)           Server (your machine or a remote host)
+─────────────────────────           ──────────────────────────────────────
+Claude Code / Claude Desktop
+    │  stdio
+    ▼
+biorxiv-mcp (local MCP shim)  ── HTTPS ──▶  biorxiv-mcp-server (REST API)
+   defines all 7 tools                         └─ SQLite FTS5 index
+   each tool calls the REST API                └─ bioRxiv sync
+```
+
+The **client** (`biorxiv-mcp`) is a local stdio MCP process that defines
+the tools and makes HTTP calls to the REST API. It runs on the agent's
+machine and never touches the database directly.
+
+The **server** (`biorxiv-mcp-server`) manages the SQLite index and serves
+a small set of authenticated JSON endpoints. It is unaware of MCP tools.
+
+A reverse proxy (Caddy, nginx, cloudflared) terminates TLS between
+the two. Both sides are packaged in this repo.
 
 ## Tools
 
 | Tool | Description |
 |---|---|
 | `search_biorxiv` | Full-text search across titles, abstracts, authors, institutions. Supports FTS5 syntax (`AND`/`OR`/`NEAR`, quoted phrases, prefix matching), category and date filters, `sort=relevance\|date`. |
-| `search_biorxiv_count` | Count matches without returning rows — useful for narrowing filters. |
+| `search_biorxiv_count` | Count matches without returning rows. |
 | `biorxiv_categories` | List all categories with paper counts. |
 | `get_paper` | Fetch a paper by DOI. Falls back to the bioRxiv API for unsynced DOIs. |
-| `download_paper` | Stream the PDF for a DOI to `~/.local/share/biorxiv-mcp/papers/`. |
-| `sync_biorxiv` | Kick off a background delta (or bulk) sync. Returns immediately; poll `biorxiv_status`. |
-| `biorxiv_status` | DB size, paper count, last sync date, in-flight sync state. |
+| `download_paper` | Download the PDF for a DOI to `~/.local/share/biorxiv-mcp/papers/`. |
+| `sync_biorxiv` | Kick off a background delta (or bulk) sync on the server. |
+| `biorxiv_status` | Paper count, last sync date, in-flight sync state. |
 
-## Install
-
-```sh
-make                    # create venv and install package in editable mode
-make install-service    # install systemd system units (needs sudo)
-make install            # register the HTTP endpoint with Claude Code,
-                        # Claude Desktop, and OpenCode
-```
-
-The server runs as a systemd system service at `http://localhost:8000/mcp`
-with a `/health` endpoint. The sync timer runs a delta sync daily at 04:00.
-The service runs as `$USER` by default; override with
-`make install-service RUN_USER=someone`.
-
-First run performs a bulk sync of the entire catalog (several hours).
-Subsequent syncs are fast deltas. You can trigger a sync manually:
+## Client install (agent's machine)
 
 ```sh
-.venv/bin/biorxiv-mcp-sync
-```
+git clone https://github.com/hmblair/biorxiv-mcp && cd biorxiv-mcp
+python3 -m venv .venv && .venv/bin/pip install -e .
 
-## Deploying publicly (HTTPS + API keys)
-
-For a public deployment, put a reverse proxy (Caddy, nginx, cloudflared)
-in front to terminate TLS and enable bearer-token auth in the MCP server
-itself.
-
-**1. Generate API keys** and put them in `deploy/biorxiv-mcp.env`:
-
-```sh
-python -c "import secrets; print(secrets.token_urlsafe(32))"
-# BIORXIV_MCP_API_KEYS=key1,key2,key3
-```
-
-When `BIORXIV_MCP_API_KEYS` is set, every request to `/mcp` must send
-`Authorization: Bearer <key>`. Keys are hashed at startup and compared in
-constant time. `/health` remains unauthenticated. A per-key rate limit
-(default 60-request burst, 1/s refill) is enforced by the middleware.
-
-**2. Terminate TLS at a reverse proxy** that forwards to
-`127.0.0.1:8000`. The MCP server stays bound to localhost; only the
-proxy is exposed. Most proxies (Caddy, cloudflared) will handle Let's
-Encrypt certificate issuance and renewal automatically.
-
-**3. Register with an agent.** For Claude Code:
-
-```sh
-claude mcp add --transport http --scope user biorxiv-mcp \
-  --header "Authorization: Bearer <your-key>" \
-  https://biorxiv-mcp.yourdomain.com/mcp
-```
-
-Or, from a clone of this repo on any machine:
-
-```sh
-export BIORXIV_MCP_ENDPOINT=https://biorxiv-mcp.yourdomain.com
-export BIORXIV_MCP_ENDPOINT_KEY=<your-key>
+export BIORXIV_MCP_ENDPOINT=https://biorxiv.example.com
+export BIORXIV_MCP_ENDPOINT_KEY=<your-api-key>
 make install
 ```
 
-This registers the endpoint + auth header with Claude Code, Claude
-Desktop, and OpenCode in one shot. The client machine does not need
-the server installed — only `python3` and this repo.
+This registers a local stdio shim with Claude Code, Claude Desktop, and
+OpenCode. The shim reads `BIORXIV_API_URL` and `BIORXIV_API_KEY` at
+runtime. If the server is unreachable or returns an error, tools report
+the HTTP status code instead of failing silently.
 
-For a single trusted operator/agent that should bypass rate limiting,
-put the key in `BIORXIV_MCP_UNLIMITED_KEYS` instead of
-`BIORXIV_MCP_API_KEYS`. Unlimited keys are implicitly valid — no need
-to list them in both.
+For localhost (server on the same machine, no auth):
 
-Revoke a key by removing it from the env file and `make restart`.
+```sh
+make install
+```
+
+## Server install (admin)
+
+```sh
+make                        # create venv + install
+make install-service        # systemd units (needs sudo)
+```
+
+The server runs at `http://127.0.0.1:8000` with a `/health` endpoint
+and daily sync timer. Put a reverse proxy in front to expose it over
+HTTPS. The server binds to localhost by default.
+
+First run performs a bulk sync of the entire bioRxiv/medRxiv catalog
+(~400k papers, several hours). Subsequent syncs are fast deltas.
+
+```sh
+.venv/bin/biorxiv-mcp-sync    # manual sync
+make start / stop / restart / status
+```
+
+### API keys
+
+Generate keys and put them in `deploy/biorxiv-mcp.env`:
+
+```sh
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+| Env var | Purpose |
+|---|---|
+| `BIORXIV_MCP_API_KEYS` | Comma-separated bearer tokens (rate-limited). |
+| `BIORXIV_MCP_UNLIMITED_KEYS` | Tokens that bypass rate limiting (implicitly valid). |
+
+When set, all `/api/*` requests require `Authorization: Bearer <key>`.
+`/health` remains unauthenticated.
+
+## REST API
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Liveness check (unauthed) |
+| `GET` | `/api/search?q=...` | Full-text search |
+| `GET` | `/api/search/count?q=...` | Count matches |
+| `GET` | `/api/categories` | Categories with counts |
+| `GET` | `/api/paper/{doi}` | Paper by DOI |
+| `GET` | `/api/paper/{doi}/pdf` | Stream PDF |
+| `GET` | `/api/status` | Database status |
+| `POST` | `/api/sync` | Trigger background sync |
 
 ## Configuration
 
-All settings are env vars, defaulted in `deploy/biorxiv-mcp.env.example`.
-Copy it to `deploy/biorxiv-mcp.env` and edit — the systemd unit loads it
-automatically.
+### Server env vars (`deploy/biorxiv-mcp.env`)
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `HOST` | `127.0.0.1` | HTTP bind address (set to `0.0.0.0` only without a reverse proxy) |
-| `PORT` | `8000` | HTTP port |
-| `TRANSPORT` | `http` | `http` (streamable HTTP) or `stdio` |
-| `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
-| `BIORXIV_MCP_API_KEYS` | *(unset)* | Comma-separated bearer tokens. Unset = open mode. |
-| `BIORXIV_MCP_UNLIMITED_KEYS` | *(unset)* | Bearer tokens that bypass rate limiting. Implicitly valid. |
-| `BIORXIV_MCP_KEY_RATE` | `1.0` | Per-key token refill (req/s) |
+| `HOST` | `127.0.0.1` | Bind address |
+| `PORT` | `8000` | Bind port |
+| `CORS_ORIGINS` | `*` | Allowed CORS origins |
+| `BIORXIV_MCP_API_KEYS` | *(unset)* | Bearer tokens (rate-limited) |
+| `BIORXIV_MCP_UNLIMITED_KEYS` | *(unset)* | Bearer tokens (unlimited) |
+| `BIORXIV_MCP_KEY_RATE` | `1.0` | Per-key refill (req/s) |
 | `BIORXIV_MCP_KEY_BURST` | `60` | Per-key bucket size |
-| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Trusted proxy IPs for `X-Forwarded-For` |
-| `LOG_LEVEL` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR` |
-| `BIORXIV_MCP_DATA` | `~/.local/share/biorxiv-mcp` | DB + PDF directory |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Trusted proxy IPs |
+| `LOG_LEVEL` | `INFO` | Log level |
+| `BIORXIV_MCP_DATA` | `~/.local/share/biorxiv-mcp` | DB directory |
+
+### Client env vars (set at install time)
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `BIORXIV_API_URL` | `http://localhost:8000` | REST API base URL |
+| `BIORXIV_API_KEY` | *(unset)* | Bearer token |
 
 ## Project layout
 
 ```
 biorxiv_mcp/
-  server.py       # MCP tool handlers + FastMCP + Starlette app
-  sync.py         # bioRxiv API client: bulk, delta, auto, resolve, pdf_url
-  db.py           # SQLite schema, FTS5 index, connection management
-  auth.py         # Bearer-token middleware + per-key rate limiting
-  ratelimit.py    # Token bucket rate limiter
-  toolkit.py      # Shared tool decorator (rate limit, errors, envelope)
-  sync_runner.py  # Standalone CLI sync entry point
+  server/
+    app.py          # Starlette REST API
+    auth.py         # Bearer-token middleware + per-key rate limiting
+    db.py           # SQLite schema, FTS5 index, connection management
+    sync.py         # bioRxiv API client (bulk, delta, auto, resolve)
+    ratelimit.py    # Token bucket
+    sync_runner.py  # Standalone sync CLI
+    main.py         # Server entry point
+  client/
+    tools.py        # MCP tool definitions
+    api.py          # HTTP client for the REST API
+    main.py         # stdio MCP entry point
 deploy/
-  biorxiv-mcp.service.in  # Templated systemd unit
+  biorxiv-mcp.service.in  # Templated systemd unit (server)
   biorxiv-sync.service.in # Sync oneshot unit
   biorxiv-sync.timer      # Daily schedule
-  install_mcp.py          # Register with agent tools
-  biorxiv-mcp.env.example # Env var reference
-tests/            # pytest suite (unit + live endpoint tests)
-Makefile          # install / service / start / stop / restart / status / test
+  install_mcp.py          # Register stdio shim with agent tools
+  biorxiv-mcp.env.example # Server env var reference
+tests/                    # Unit + integration tests
+Makefile
 ```
 
 ## Development
@@ -138,7 +164,7 @@ Makefile          # install / service / start / stop / restart / status / test
 ```sh
 uv pip install -e '.[test]'
 make test                        # unit tests
-BIORXIV_MCP_ENDPOINT=https://biorxiv-mcp.yourdomain.com \
+BIORXIV_MCP_ENDPOINT=https://biorxiv.example.com \
 BIORXIV_MCP_ENDPOINT_KEY=<token> \
 make test-endpoint               # live tests against a deployed server
 ```

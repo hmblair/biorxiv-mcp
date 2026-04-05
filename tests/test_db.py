@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from biorxiv_mcp import db
+from biorxiv_mcp.server import db
 
 
 @pytest.fixture()

@@ -1,0 +1,271 @@
+"""REST API for the bioRxiv/medRxiv index.
+
+The server is tool-unaware: it exposes a small set of JSON endpoints and
+authenticates requests with a bearer token. The MCP tool layer lives in
+``biorxiv_mcp.client`` and calls into this API.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import re
+import sqlite3
+from datetime import datetime, timezone
+from typing import TypedDict
+
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.routing import Route
+
+import httpx
+
+from . import db, sync
+from .auth import BearerAuth, load_keys
+
+logger = logging.getLogger(__name__)
+
+# -- Policy -------------------------------------------------------------------
+
+MAX_SEARCH_LIMIT = 100
+MAX_PDF_BYTES = 100 * 1024 * 1024  # 100 MB
+_DOI_RE = re.compile(r"^10\.\d{4,9}/[A-Za-z0-9._\-;()/:]+$")
+_CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+
+
+# -- Validation ---------------------------------------------------------------
+
+def _date(s: str | None, field: str) -> str | None:
+    if s is None or s == "":
+        return None
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"{field} must be YYYY-MM-DD, got {s!r}")
+    return s
+
+
+def _int(s: str | None, field: str, default: int, lo: int, hi: int) -> int:
+    if s is None or s == "":
+        return default
+    try:
+        v = int(s)
+    except ValueError:
+        raise ValueError(f"{field} must be an integer, got {s!r}")
+    return max(lo, min(v, hi))
+
+
+def _bool(s: str | None) -> bool:
+    return s is not None and s.lower() in ("1", "true", "yes")
+
+
+def _validate_doi(doi: str) -> str:
+    if not _DOI_RE.match(doi):
+        raise ValueError(f"Invalid DOI format: {doi!r}")
+    return doi
+
+
+def _error(msg: str, status: int = 400) -> JSONResponse:
+    return JSONResponse({"error": msg}, status_code=status)
+
+
+# -- Background sync ----------------------------------------------------------
+
+class SyncState(TypedDict, total=False):
+    status: str
+    started_at: str | None
+    finished_at: str | None
+    error: str | None
+    last_result: dict
+
+
+_sync_task: asyncio.Task | None = None
+_sync_state: SyncState = {"status": "idle", "started_at": None, "finished_at": None, "error": None}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _run_sync() -> None:
+    conn = db.get_connection()
+    try:
+        result = await sync.auto_sync(conn)
+        _sync_state.update(status="idle", finished_at=_now(), last_result=result, error=None)
+    except Exception as e:
+        logger.exception("Background sync failed")
+        _sync_state.update(status="idle", finished_at=_now(), error=str(e))
+    finally:
+        conn.close()
+
+
+# -- Route handlers -----------------------------------------------------------
+
+async def health(request: Request) -> Response:
+    try:
+        with db.connection() as conn:
+            return JSONResponse({
+                "status": "ok",
+                "paper_count": db.get_paper_count(conn),
+                "last_sync": db.get_last_sync_date(conn),
+                "auth_enabled": bool(load_keys()),
+            })
+    except Exception as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
+
+
+async def search(request: Request) -> Response:
+    q = request.query_params
+    try:
+        query = q.get("q", "")
+        limit = _int(q.get("limit"), "limit", default=10, lo=1, hi=MAX_SEARCH_LIMIT)
+        after = _date(q.get("after"), "after")
+        before = _date(q.get("before"), "before")
+        detail = _bool(q.get("detail"))
+        sort = q.get("sort", "relevance")
+        category = q.get("category") or None
+    except ValueError as e:
+        return _error(str(e))
+
+    try:
+        with db.connection() as conn:
+            results = db.search(conn, query, limit=limit, category=category,
+                                after=after, before=before, detail=detail, sort=sort)
+        return JSONResponse(results)
+    except sqlite3.Error as e:
+        logger.error("search db error: %s", e)
+        return _error(f"Database error: {e}", 500)
+
+
+async def search_count(request: Request) -> Response:
+    q = request.query_params
+    try:
+        after = _date(q.get("after"), "after")
+        before = _date(q.get("before"), "before")
+    except ValueError as e:
+        return _error(str(e))
+    try:
+        with db.connection() as conn:
+            n = db.search_count(conn, q.get("q", ""), category=q.get("category") or None,
+                                after=after, before=before)
+        return JSONResponse({"count": n})
+    except sqlite3.Error as e:
+        return _error(f"Database error: {e}", 500)
+
+
+async def categories(request: Request) -> Response:
+    try:
+        with db.connection() as conn:
+            return JSONResponse(db.get_categories(conn))
+    except sqlite3.Error as e:
+        return _error(f"Database error: {e}", 500)
+
+
+async def get_paper(request: Request) -> Response:
+    try:
+        doi = _validate_doi(request.path_params["doi"])
+    except ValueError as e:
+        return _error(str(e))
+    try:
+        with db.connection() as conn:
+            paper = sync.resolve_paper(conn, doi)
+    except sqlite3.Error as e:
+        return _error(f"Database error: {e}", 500)
+    if paper is None:
+        return _error(f"DOI {doi} not found", 404)
+    return JSONResponse(paper)
+
+
+async def download_pdf(request: Request) -> Response:
+    try:
+        doi = _validate_doi(request.path_params["doi"])
+    except ValueError as e:
+        return _error(str(e))
+    try:
+        with db.connection() as conn:
+            paper = sync.resolve_paper(conn, doi)
+    except sqlite3.Error as e:
+        return _error(f"Database error: {e}", 500)
+    if paper is None:
+        return _error(f"DOI {doi} not found", 404)
+
+    url = sync.pdf_url(doi, paper.get("server") or sync.DEFAULT_SERVER, paper.get("version") or 1)
+
+    async def _stream():
+        total = 0
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+                async with client.stream("GET", url) as resp:
+                    if resp.status_code != 200:
+                        return
+                    clen = resp.headers.get("content-length")
+                    if clen and int(clen) > MAX_PDF_BYTES:
+                        return
+                    first = True
+                    async for chunk in resp.aiter_bytes():
+                        if first:
+                            if not chunk.startswith(b"%PDF"):
+                                return
+                            first = False
+                        total += len(chunk)
+                        if total > MAX_PDF_BYTES:
+                            return
+                        yield chunk
+        except httpx.HTTPError as e:
+            logger.error("PDF fetch failed for %s: %s", doi, e)
+
+    return StreamingResponse(_stream(), media_type="application/pdf")
+
+
+async def status_endpoint(request: Request) -> Response:
+    try:
+        with db.connection() as conn:
+            return JSONResponse({
+                "paper_count": db.get_paper_count(conn),
+                "last_sync": db.get_last_sync_date(conn),
+                "bulk_sync_cursor": db.get_bulk_sync_cursor(conn),
+                "db_size_mb": round(db.get_db_size_mb(), 2),
+                "db_path": str(db.DB_PATH),
+                "sync": dict(_sync_state),
+            })
+    except sqlite3.Error as e:
+        return _error(f"Database error: {e}", 500)
+
+
+async def start_sync(request: Request) -> Response:
+    global _sync_task
+    if _sync_task is not None and not _sync_task.done():
+        return JSONResponse({"status": "already_running", "started_at": _sync_state["started_at"]})
+    _sync_state.update(status="running", started_at=_now(), finished_at=None, error=None)
+    _sync_task = asyncio.create_task(_run_sync())
+    logger.info("sync scheduled")
+    return JSONResponse({"status": "started", "started_at": _sync_state["started_at"]})
+
+
+# -- App factory --------------------------------------------------------------
+
+def create_app() -> Starlette:
+    routes = [
+        Route("/health", health, methods=["GET"]),
+        Route("/api/search", search, methods=["GET"]),
+        Route("/api/search/count", search_count, methods=["GET"]),
+        Route("/api/categories", categories, methods=["GET"]),
+        Route("/api/paper/{doi:path}/pdf", download_pdf, methods=["GET"]),
+        Route("/api/paper/{doi:path}", get_paper, methods=["GET"]),
+        Route("/api/status", status_endpoint, methods=["GET"]),
+        Route("/api/sync", start_sync, methods=["POST"]),
+    ]
+    middleware = [
+        Middleware(BearerAuth),
+        Middleware(
+            CORSMiddleware,
+            allow_origins=_CORS_ORIGINS,
+            allow_methods=["GET", "POST"],
+            allow_headers=["*"],
+        ),
+    ]
+    return Starlette(routes=routes, middleware=middleware)

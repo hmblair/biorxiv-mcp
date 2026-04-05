@@ -3,7 +3,7 @@
 import time
 from unittest.mock import patch
 
-from biorxiv_mcp.ratelimit import TokenBucket
+from biorxiv_mcp.server.ratelimit import TokenBucket
 
 
 def test_consume_within_burst():
