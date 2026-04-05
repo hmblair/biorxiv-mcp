@@ -6,15 +6,22 @@ SYSTEMD_DIR := /etc/systemd/system
 RUN_USER ?= $(USER)
 SERVICE := biorxiv-mcp
 PORT ?= 8000
-MCP_URL ?= http://localhost:$(PORT)/mcp
-# Optional: full Authorization header value, e.g. MCP_AUTH="Bearer <token>"
-MCP_AUTH ?=
 
-.PHONY: install uninstall install-service uninstall-service start stop restart status
+# BIORXIV_MCP_ENDPOINT (e.g. https://biorxiv.example.com) is the single
+# source of truth for the deployed URL. If set, it drives both client
+# registration and the live endpoint tests. Falls back to localhost.
+ENDPOINT ?= $(BIORXIV_MCP_ENDPOINT)
+MCP_URL ?= $(if $(ENDPOINT),$(ENDPOINT)/mcp,http://localhost:$(PORT)/mcp)
+# Bearer token used for registration + tests. Defaults to the env var.
+ENDPOINT_KEY ?= $(BIORXIV_MCP_ENDPOINT_KEY)
+MCP_AUTH ?= $(if $(ENDPOINT_KEY),Bearer $(ENDPOINT_KEY),)
 
-# Register the running HTTP MCP with Claude Code, Claude Desktop, and OpenCode.
-# For a remote server with auth:
-#   make install MCP_URL=https://biorxiv.example.com/mcp MCP_AUTH="Bearer $$KEY"
+.PHONY: install uninstall install-service uninstall-service start stop restart status test test-endpoint
+
+# Register the MCP with Claude Code, Claude Desktop, and OpenCode.
+# Local server:    make install
+# Remote server:   BIORXIV_MCP_ENDPOINT=https://biorxiv.example.com \
+#                  BIORXIV_MCP_ENDPOINT_KEY=<token> make install
 install:
 	python3 $(DEPLOY)/install_mcp.py install --name $(SERVICE) --url $(MCP_URL) \
 	    $(if $(MCP_AUTH),--auth "$(MCP_AUTH)",)
@@ -55,6 +62,15 @@ restart:
 status:
 	@systemctl status $(SERVICE) --no-pager || true
 
+test: $(VENV)
+	$(VENV)/bin/pytest -q
+
+# Live endpoint tests; require BIORXIV_MCP_ENDPOINT (and optionally
+# BIORXIV_MCP_ENDPOINT_KEY) in the environment.
+test-endpoint: $(VENV)
+	BIORXIV_MCP_ENDPOINT="$(ENDPOINT)" BIORXIV_MCP_ENDPOINT_KEY="$(ENDPOINT_KEY)" \
+	    $(VENV)/bin/pytest -v tests/test_endpoint.py
+
 $(VENV):
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip install -e .
+	$(VENV)/bin/pip install -e '.[test]'
