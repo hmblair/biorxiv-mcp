@@ -91,10 +91,10 @@ def _preflight(url: str, key: str | None) -> bool:
 def install_claude_code(name: str, shim: str, env: dict) -> None:
     subprocess.run(["claude", "mcp", "remove", "--scope", "user", name],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    cmd = ["claude", "mcp", "add", "--scope", "user"]
+    cmd = ["claude", "mcp", "add", "--scope", "user", name]
     for k, v in env.items():
         cmd += ["-e", f"{k}={v}"]
-    cmd += [name, "--", shim]
+    cmd += ["--", shim]
     try:
         subprocess.run(cmd, check=True)
         print(f"  Added {name} to Claude Code")

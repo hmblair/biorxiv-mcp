@@ -15,7 +15,7 @@ BIORXIV_API_KEY ?= $(BIORXIV_MCP_ENDPOINT_KEY)
 # Local:   make install
 # Remote:  BIORXIV_MCP_ENDPOINT=https://biorxiv.example.com \
 #          BIORXIV_MCP_ENDPOINT_KEY=<token> make install
-install:
+install: $(VENV)
 	python3 $(DEPLOY)/install_mcp.py install \
 	    --url "$(BIORXIV_API_URL)" \
 	    $(if $(BIORXIV_API_KEY),--key "$(BIORXIV_API_KEY)",)
