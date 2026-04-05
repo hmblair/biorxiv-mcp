@@ -38,22 +38,18 @@ def test_health_ok(client):
     body = r.json()
     assert body["status"] == "ok"
     assert body["paper_count"] >= 0
-    assert "auth_enabled" in body
 
 
-def test_requires_auth_when_enabled():
-    """Unauthenticated requests to /api/* should be rejected when auth is on."""
+def test_requires_auth():
+    """Unauthenticated requests to /api/* should be rejected."""
     with httpx.Client(base_url=ENDPOINT, timeout=10.0) as c:
-        r = c.get("/health")
-        if not r.json().get("auth_enabled"):
-            pytest.skip("endpoint is in open mode")
         r = c.get("/api/categories")
         assert r.status_code == 401
 
 
 def test_search(client):
     if not KEY:
-        pytest.skip("set BIORXIV_MCP_ENDPOINT_KEY for authed tests")
+        pytest.skip("set BIORXIV_MCP_ENDPOINT_KEY")
     r = client.get("/api/search", params={"q": "CRISPR", "limit": "2"})
     assert r.status_code == 200
     data = r.json()
@@ -63,7 +59,7 @@ def test_search(client):
 
 def test_search_count(client):
     if not KEY:
-        pytest.skip("set BIORXIV_MCP_ENDPOINT_KEY for authed tests")
+        pytest.skip("set BIORXIV_MCP_ENDPOINT_KEY")
     r = client.get("/api/search/count", params={"q": "CRISPR"})
     assert r.status_code == 200
     assert r.json()["count"] > 0
@@ -71,7 +67,7 @@ def test_search_count(client):
 
 def test_categories(client):
     if not KEY:
-        pytest.skip("set BIORXIV_MCP_ENDPOINT_KEY for authed tests")
+        pytest.skip("set BIORXIV_MCP_ENDPOINT_KEY")
     r = client.get("/api/categories")
     assert r.status_code == 200
     assert len(r.json()) > 0
@@ -79,7 +75,7 @@ def test_categories(client):
 
 def test_status(client):
     if not KEY:
-        pytest.skip("set BIORXIV_MCP_ENDPOINT_KEY for authed tests")
+        pytest.skip("set BIORXIV_MCP_ENDPOINT_KEY")
     r = client.get("/api/status")
     assert r.status_code == 200
     assert r.json()["paper_count"] > 0

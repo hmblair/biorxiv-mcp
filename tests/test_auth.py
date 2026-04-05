@@ -20,7 +20,6 @@ def _ok(request):
 
 @pytest.fixture()
 def _db(monkeypatch):
-    """Provide an in-memory DB with the api_keys table, patched as the shared connection."""
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     db._initialized_ids.discard(id(conn))
@@ -37,28 +36,32 @@ def _db(monkeypatch):
 
 def _app():
     app = Starlette(routes=[
-        Route("/mcp", _ok, methods=["GET"]),
+        Route("/api/test", _ok, methods=["GET"]),
         Route("/health", _ok, methods=["GET"]),
     ])
     app.add_middleware(BearerAuth)
     return app
 
 
-# -- open mode (no keys in DB) ------------------------------------------------
-
-def test_open_mode_allows_requests(_db):
-    client = TestClient(_app())
-    r = client.get("/mcp")
-    assert r.status_code == 200
-    assert r.json()["key_id"] == "anonymous"
-
+# -- /health always unauthenticated ------------------------------------------
 
 def test_health_never_requires_auth(_db):
-    conn = _db
-    raw = keys.generate(conn, label="test", unlimited=False)
+    keys.generate(_db, label="test")
     client = TestClient(_app())
-    r = client.get("/health")
-    assert r.status_code == 200
+    assert client.get("/health").status_code == 200
+
+
+# -- no keys = all requests rejected -----------------------------------------
+
+def test_no_keys_rejects(_db):
+    client = TestClient(_app())
+    assert client.get("/api/test").status_code == 401
+
+
+def test_no_keys_rejects_even_with_token(_db):
+    client = TestClient(_app())
+    r = client.get("/api/test", headers={"Authorization": "Bearer anything"})
+    assert r.status_code == 403
 
 
 # -- bearer token validation --------------------------------------------------
@@ -66,7 +69,7 @@ def test_health_never_requires_auth(_db):
 def test_missing_token_returns_401(_db):
     keys.generate(_db, label="test")
     client = TestClient(_app())
-    r = client.get("/mcp")
+    r = client.get("/api/test")
     assert r.status_code == 401
     assert "WWW-Authenticate" in r.headers
 
@@ -74,14 +77,14 @@ def test_missing_token_returns_401(_db):
 def test_wrong_token_returns_403(_db):
     keys.generate(_db, label="test")
     client = TestClient(_app())
-    r = client.get("/mcp", headers={"Authorization": "Bearer nope"})
+    r = client.get("/api/test", headers={"Authorization": "Bearer nope"})
     assert r.status_code == 403
 
 
 def test_valid_token_allowed(_db):
     raw = keys.generate(_db, label="test")
     client = TestClient(_app())
-    r = client.get("/mcp", headers={"Authorization": f"Bearer {raw}"})
+    r = client.get("/api/test", headers={"Authorization": f"Bearer {raw}"})
     assert r.status_code == 200
     assert r.json()["key_id"] == keys.hash_token(raw)[:8]
 
@@ -89,32 +92,24 @@ def test_valid_token_allowed(_db):
 def test_bearer_prefix_case_insensitive(_db):
     raw = keys.generate(_db, label="test")
     client = TestClient(_app())
-    r = client.get("/mcp", headers={"Authorization": f"bearer {raw}"})
-    assert r.status_code == 200
+    assert client.get("/api/test", headers={"Authorization": f"bearer {raw}"}).status_code == 200
 
 
-def test_revoked_key_rejected(_db):
-    raw = keys.generate(_db, label="revokeme")
-    kid = keys.hash_token(raw)[:8]
-    keys.revoke(_db, kid)
+# -- key lifecycle (no restart needed) ----------------------------------------
+
+def test_new_key_works_immediately(_db):
     client = TestClient(_app())
-    r = client.get("/mcp", headers={"Authorization": f"Bearer {raw}"})
-    assert r.status_code == 403
-
-
-def test_key_added_without_restart(_db):
-    """New keys are visible immediately — no restart needed."""
-    client = TestClient(_app())
-    # Start in open mode.
-    r = client.get("/mcp")
-    assert r.status_code == 200
-    assert r.json()["key_id"] == "anonymous"
-    # Add a key — now auth is required.
+    assert client.get("/api/test").status_code == 401
     raw = keys.generate(_db, label="new")
-    r = client.get("/mcp")
-    assert r.status_code == 401
-    r = client.get("/mcp", headers={"Authorization": f"Bearer {raw}"})
-    assert r.status_code == 200
+    assert client.get("/api/test", headers={"Authorization": f"Bearer {raw}"}).status_code == 200
+
+
+def test_deleted_key_rejected_immediately(_db):
+    raw = keys.generate(_db, label="temp")
+    client = TestClient(_app())
+    assert client.get("/api/test", headers={"Authorization": f"Bearer {raw}"}).status_code == 200
+    keys.delete(_db, keys.hash_token(raw)[:8])
+    assert client.get("/api/test", headers={"Authorization": f"Bearer {raw}"}).status_code == 403
 
 
 # -- unlimited keys -----------------------------------------------------------
@@ -127,11 +122,11 @@ def test_unlimited_key_bypasses_rate_limit(_db, monkeypatch):
     importlib.reload(auth_mod)
 
     raw = keys.generate(_db, label="admin", unlimited=True)
-    app = Starlette(routes=[Route("/mcp", _ok, methods=["GET"])])
+    app = Starlette(routes=[Route("/api/test", _ok, methods=["GET"])])
     app.add_middleware(auth_mod.BearerAuth)
     client = TestClient(app)
     for _ in range(3):
-        assert client.get("/mcp", headers={"Authorization": f"Bearer {raw}"}).status_code == 200
+        assert client.get("/api/test", headers={"Authorization": f"Bearer {raw}"}).status_code == 200
 
     monkeypatch.delenv("BIORXIV_MCP_KEY_RATE", raising=False)
     monkeypatch.delenv("BIORXIV_MCP_KEY_BURST", raising=False)
@@ -141,26 +136,21 @@ def test_unlimited_key_bypasses_rate_limit(_db, monkeypatch):
 # -- keys module --------------------------------------------------------------
 
 def test_generate_and_list(_db):
-    raw = keys.generate(_db, label="laptop", unlimited=True)
+    keys.generate(_db, label="laptop", unlimited=True)
     all_keys = keys.list_keys(_db)
     assert len(all_keys) == 1
     assert all_keys[0].label == "laptop"
     assert all_keys[0].unlimited is True
-    assert all_keys[0].disabled is False
 
 
-def test_revoke_hides_from_list(_db):
+def test_delete_removes_from_list(_db):
     raw = keys.generate(_db, label="temp")
     kid = keys.hash_token(raw)[:8]
-    keys.revoke(_db, kid)
+    keys.delete(_db, kid)
     assert keys.list_keys(_db) == []
-    assert len(keys.list_keys(_db, include_disabled=True)) == 1
 
 
-def test_load_active_excludes_disabled(_db):
-    r1 = keys.generate(_db, label="a")
-    r2 = keys.generate(_db, label="b")
-    keys.revoke(_db, keys.hash_token(r1)[:8])
-    active = keys.load_active(_db)
-    assert keys.hash_token(r1) not in active
-    assert keys.hash_token(r2) in active
+def test_import_rejects_duplicate(_db):
+    raw = keys.generate(_db, label="a")
+    with pytest.raises(ValueError, match="already exists"):
+        keys.import_token(_db, raw, label="b")

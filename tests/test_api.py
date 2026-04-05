@@ -7,26 +7,28 @@ from unittest.mock import patch
 import pytest
 from starlette.testclient import TestClient
 
-from biorxiv_mcp.server import db
+from biorxiv_mcp.server import db, keys
 from biorxiv_mcp.server.app import create_app
 
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
-    """Provide a test client backed by an in-memory DB, auth disabled."""
+    """Provide a test client backed by an in-memory DB with one API key."""
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     db._initialized_ids.discard(id(conn))
     db.init_db(conn)
+    raw = keys.generate(conn, label="test", unlimited=True)
 
     @contextmanager
     def fake_connection():
         yield conn
 
     monkeypatch.setattr(db, "connection", fake_connection)
-    # No keys in the DB → open mode (auth disabled).
     app = create_app()
-    yield TestClient(app), conn
+    tc = TestClient(app)
+    tc.headers["Authorization"] = f"Bearer {raw}"
+    yield tc, conn
     conn.close()
 
 

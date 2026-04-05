@@ -24,7 +24,7 @@ from starlette.routing import Route
 
 import httpx
 
-from . import db, keys, sync
+from . import db, sync
 from .auth import BearerAuth
 
 logger = logging.getLogger(__name__)
@@ -112,7 +112,6 @@ async def health(request: Request) -> Response:
                 "status": "ok",
                 "paper_count": db.get_paper_count(conn),
                 "last_sync": db.get_last_sync_date(conn),
-                "auth_enabled": bool(keys.load_active(conn)),
             })
     except Exception as e:
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)

@@ -1,4 +1,8 @@
-"""API key management backed by the api_keys SQLite table."""
+"""API key management backed by the api_keys SQLite table.
+
+Simple model: a key exists in the table = it can authenticate.
+Deleting the row revokes access. No soft-delete / disabled flag.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +25,6 @@ class ApiKey:
     label: str
     unlimited: bool
     created_at: str
-    disabled: bool
 
     @property
     def key_id(self) -> str:
@@ -32,7 +35,7 @@ class ApiKey:
 def _insert(conn: sqlite3.Connection, h: str, label: str, unlimited: bool) -> None:
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
-        "INSERT INTO api_keys (hash, label, unlimited, created_at, disabled) VALUES (?, ?, ?, ?, 0)",
+        "INSERT INTO api_keys (hash, label, unlimited, created_at) VALUES (?, ?, ?, ?)",
         (h, label, int(unlimited), now),
     )
     conn.commit()
@@ -54,37 +57,27 @@ def import_token(conn: sqlite3.Connection, raw: str, label: str, unlimited: bool
     return h[:8]
 
 
-def list_keys(conn: sqlite3.Connection, include_disabled: bool = False) -> list[ApiKey]:
-    """Return all keys, optionally including disabled ones."""
-    sql = "SELECT hash, label, unlimited, created_at, disabled FROM api_keys"
-    if not include_disabled:
-        sql += " WHERE disabled = 0"
-    sql += " ORDER BY created_at"
-    rows = conn.execute(sql).fetchall()
-    return [ApiKey(hash=r[0], label=r[1], unlimited=bool(r[2]),
-                   created_at=r[3], disabled=bool(r[4])) for r in rows]
+def list_keys(conn: sqlite3.Connection) -> list[ApiKey]:
+    """Return all keys."""
+    rows = conn.execute(
+        "SELECT hash, label, unlimited, created_at FROM api_keys ORDER BY created_at"
+    ).fetchall()
+    return [ApiKey(hash=r[0], label=r[1], unlimited=bool(r[2]), created_at=r[3]) for r in rows]
 
 
-def revoke(conn: sqlite3.Connection, key_id: str) -> ApiKey | None:
-    """Disable a key by its key_id prefix. Returns the key if found."""
+def delete(conn: sqlite3.Connection, key_id: str) -> ApiKey | None:
+    """Delete a key by its key_id prefix. Returns the key if found."""
     row = conn.execute(
-        "SELECT hash, label, unlimited, created_at, disabled FROM api_keys WHERE hash LIKE ?",
+        "SELECT hash, label, unlimited, created_at FROM api_keys WHERE hash LIKE ?",
         (key_id + "%",),
     ).fetchone()
     if row is None:
         return None
-    conn.execute("UPDATE api_keys SET disabled = 1 WHERE hash = ?", (row[0],))
+    conn.execute("DELETE FROM api_keys WHERE hash = ?", (row[0],))
     conn.commit()
-    return ApiKey(hash=row[0], label=row[1], unlimited=bool(row[2]),
-                  created_at=row[3], disabled=True)
+    return ApiKey(hash=row[0], label=row[1], unlimited=bool(row[2]), created_at=row[3])
 
 
 def load_active(conn: sqlite3.Connection) -> dict[str, ApiKey]:
-    """Load all active keys as a dict keyed by hash (for auth middleware)."""
-    return {k.hash: k for k in list_keys(conn, include_disabled=False)}
-
-
-def any_keys_exist(conn: sqlite3.Connection) -> bool:
-    """True if any keys have ever been created (even if all are now disabled)."""
-    row = conn.execute("SELECT COUNT(*) FROM api_keys").fetchone()
-    return row[0] > 0
+    """Load all keys as a dict keyed by hash (for auth middleware)."""
+    return {k.hash: k for k in list_keys(conn)}

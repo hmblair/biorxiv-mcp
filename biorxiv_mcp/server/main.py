@@ -3,8 +3,9 @@
 Subcommands:
     biorxiv-mcp-server              Start the REST API server (default)
     biorxiv-mcp-server keys add     Generate a new API key
+    biorxiv-mcp-server keys import  Import an existing token
     biorxiv-mcp-server keys list    List all keys
-    biorxiv-mcp-server keys revoke  Revoke a key
+    biorxiv-mcp-server keys delete  Delete a key
 """
 
 from __future__ import annotations
@@ -49,22 +50,6 @@ def _keys_add(args: argparse.Namespace) -> None:
     print()
 
 
-def _keys_list(args: argparse.Namespace) -> None:
-    from . import db, keys
-    conn = db.get_connection()
-    all_keys = keys.list_keys(conn, include_disabled=args.all)
-    conn.close()
-    if not all_keys:
-        print("\nNo API keys configured. Create one with:\n  biorxiv-mcp-server keys add --label <name>\n")
-        return
-    print(f"\n{'ID':<10} {'Label':<25} {'Unlimited':<11} {'Created':<22} {'Status'}")
-    print("-" * 78)
-    for k in all_keys:
-        status = "disabled" if k.disabled else "active"
-        print(f"{k.key_id:<10} {k.label:<25} {'yes' if k.unlimited else 'no':<11} {k.created_at[:19]:<22} {status}")
-    print()
-
-
 def _keys_import(args: argparse.Namespace) -> None:
     from . import db, keys
     conn = db.get_connection()
@@ -78,15 +63,30 @@ def _keys_import(args: argparse.Namespace) -> None:
     print(f"\n  Imported as key ID {key_id} (label: {args.label}, unlimited: {'yes' if args.unlimited else 'no'})\n")
 
 
-def _keys_revoke(args: argparse.Namespace) -> None:
+def _keys_list(args: argparse.Namespace) -> None:
     from . import db, keys
     conn = db.get_connection()
-    key = keys.revoke(conn, args.key_id)
+    all_keys = keys.list_keys(conn)
+    conn.close()
+    if not all_keys:
+        print("\nNo API keys configured. Create one with:\n  biorxiv-mcp-server keys add --label <name>\n")
+        return
+    print(f"\n{'ID':<10} {'Label':<25} {'Unlimited':<11} {'Created'}")
+    print("-" * 68)
+    for k in all_keys:
+        print(f"{k.key_id:<10} {k.label:<25} {'yes' if k.unlimited else 'no':<11} {k.created_at[:19]}")
+    print()
+
+
+def _keys_delete(args: argparse.Namespace) -> None:
+    from . import db, keys
+    conn = db.get_connection()
+    key = keys.delete(conn, args.key_id)
     conn.close()
     if key is None:
         print(f"\nNo key found matching '{args.key_id}'.\n")
         sys.exit(1)
-    print(f"\nRevoked key {key.key_id} ({key.label}).\n")
+    print(f"\nDeleted key {key.key_id} ({key.label}).\n")
 
 
 def main() -> None:
@@ -96,9 +96,6 @@ def main() -> None:
     )
     sub = parser.add_subparsers(dest="command")
 
-    # Default: start server (no subcommand)
-
-    # keys subcommand
     keys_parser = sub.add_parser("keys", help="Manage API keys")
     keys_sub = keys_parser.add_subparsers(dest="keys_action")
 
@@ -106,16 +103,15 @@ def main() -> None:
     add_p.add_argument("--label", required=True, help="Human-readable label (e.g. 'hamish-macbook')")
     add_p.add_argument("--unlimited", action="store_true", help="Bypass rate limiting")
 
-    list_p = keys_sub.add_parser("list", help="List all API keys")
-    list_p.add_argument("--all", action="store_true", help="Include disabled keys")
-
     import_p = keys_sub.add_parser("import", help="Import an existing token")
     import_p.add_argument("--label", required=True, help="Human-readable label")
     import_p.add_argument("--token", required=True, help="Raw bearer token to import")
     import_p.add_argument("--unlimited", action="store_true", help="Bypass rate limiting")
 
-    revoke_p = keys_sub.add_parser("revoke", help="Revoke an API key")
-    revoke_p.add_argument("key_id", help="Key ID prefix (from 'keys list')")
+    keys_sub.add_parser("list", help="List all API keys")
+
+    delete_p = keys_sub.add_parser("delete", help="Delete an API key")
+    delete_p.add_argument("key_id", help="Key ID prefix (from 'keys list')")
 
     args = parser.parse_args()
 
@@ -128,8 +124,8 @@ def main() -> None:
             _keys_import(args)
         elif args.keys_action == "list":
             _keys_list(args)
-        elif args.keys_action == "revoke":
-            _keys_revoke(args)
+        elif args.keys_action == "delete":
+            _keys_delete(args)
         else:
             keys_parser.print_help()
     else:
