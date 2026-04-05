@@ -48,6 +48,8 @@ def validate_date_range(after: str | None, before: str | None) -> tuple[str | No
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
 TRANSPORT = os.environ.get("TRANSPORT", "http")
+# Comma-separated list of allowed CORS origins; "*" allows all.
+CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
 
 mcp = FastMCP("biorxiv", host=HOST, port=PORT)
 
@@ -303,7 +305,7 @@ def main() -> None:
     app = mcp.streamable_http_app()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=CORS_ORIGINS,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["mcp-session-id"],

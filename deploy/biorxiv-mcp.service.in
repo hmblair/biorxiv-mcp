@@ -1,0 +1,15 @@
+[Unit]
+Description=bioRxiv MCP server
+After=network.target
+
+[Service]
+WorkingDirectory=@PROJECT_ROOT@
+# Override via: systemctl --user edit biorxiv-mcp
+# e.g. Environment="HOST=127.0.0.1" "CORS_ORIGINS=https://my.app"
+EnvironmentFile=-@PROJECT_ROOT@/deploy/biorxiv-mcp.env
+ExecStart=@PROJECT_ROOT@/.venv/bin/biorxiv-mcp
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -3,8 +3,8 @@ Description=bioRxiv database sync
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/hmblair/dev/biorxiv-mcp
-ExecStart=/home/hmblair/dev/biorxiv-mcp/.venv/bin/biorxiv-mcp-sync
+WorkingDirectory=@PROJECT_ROOT@
+ExecStart=@PROJECT_ROOT@/.venv/bin/biorxiv-mcp-sync
 # Bulk sync can take hours
 TimeoutStartSec=86400
 Restart=on-failure

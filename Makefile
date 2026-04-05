@@ -29,8 +29,8 @@ json.dump(d, open(f, "w"), indent=2); \
 print("Removed $(SERVICE) from opencode config")'
 
 install-service: $(VENV)
-	cp $(DEPLOY)/$(SERVICE).service $(SYSTEMD_USER_DIR)/
-	cp $(DEPLOY)/biorxiv-sync.service $(SYSTEMD_USER_DIR)/
+	sed 's|@PROJECT_ROOT@|$(CURDIR)|g' $(DEPLOY)/$(SERVICE).service.in > $(SYSTEMD_USER_DIR)/$(SERVICE).service
+	sed 's|@PROJECT_ROOT@|$(CURDIR)|g' $(DEPLOY)/biorxiv-sync.service.in > $(SYSTEMD_USER_DIR)/biorxiv-sync.service
 	cp $(DEPLOY)/biorxiv-sync.timer $(SYSTEMD_USER_DIR)/
 	systemctl --user daemon-reload
 	systemctl --user enable --now $(SERVICE).service
