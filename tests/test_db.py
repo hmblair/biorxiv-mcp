@@ -228,6 +228,7 @@ def test_connection_context_manager(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_DIR", tmp_path)
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     if hasattr(db._thread_local, "conn"):
+        db._initialized_ids.discard(id(db._thread_local.conn))
         del db._thread_local.conn
     with db.connection() as conn:
         assert conn is not None
@@ -238,6 +239,7 @@ def test_connection_reuses_per_thread_conn(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_DIR", tmp_path)
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     if hasattr(db._thread_local, "conn"):
+        db._initialized_ids.discard(id(db._thread_local.conn))
         del db._thread_local.conn
     with db.connection() as c1:
         pass

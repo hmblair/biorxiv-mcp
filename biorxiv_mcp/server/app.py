@@ -245,10 +245,56 @@ async def start_sync(request: Request) -> Response:
     return JSONResponse({"status": "started", "started_at": _sync_state["started_at"]})
 
 
+# -- Homepage -----------------------------------------------------------------
+
+def _render_homepage() -> str:
+    """Render README.md to an HTML page at startup."""
+    from pathlib import Path
+    readme_path = Path(__file__).resolve().parent.parent.parent / "README.md"
+    try:
+        from markdown_it import MarkdownIt
+        md = MarkdownIt()
+        body = md.render(readme_path.read_text())
+    except Exception:
+        body = f"<pre>{readme_path.read_text()}</pre>" if readme_path.exists() else "<p>biorxiv-mcp</p>"
+    return (
+        "<!doctype html><html><head>"
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        "<title>biorxiv-mcp</title>"
+        "<style>"
+        "body { max-width: 50rem; margin: 2rem auto; padding: 0 1rem; "
+        "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; "
+        "line-height: 1.6; color: #333; }"
+        "pre, code { background: #f5f5f5; border-radius: 4px; }"
+        "pre { padding: 1rem; overflow-x: auto; }"
+        "code { padding: 0.15em 0.3em; }"
+        "pre code { padding: 0; background: none; }"
+        "table { border-collapse: collapse; width: 100%; }"
+        "th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; }"
+        "th { background: #f5f5f5; }"
+        "a { color: #0366d6; }"
+        "</style>"
+        f"</head><body>{body}</body></html>"
+    )
+
+
+_HOMEPAGE_HTML: str | None = None
+
+
+async def homepage(request: Request) -> Response:
+    global _HOMEPAGE_HTML
+    if _HOMEPAGE_HTML is None:
+        _HOMEPAGE_HTML = _render_homepage()
+    from starlette.responses import HTMLResponse
+    return HTMLResponse(_HOMEPAGE_HTML)
+
+
 # -- App factory --------------------------------------------------------------
 
 def create_app() -> Starlette:
     routes = [
+        Route("/", homepage, methods=["GET"]),
         Route("/health", health, methods=["GET"]),
         Route("/api/search", search, methods=["GET"]),
         Route("/api/search/count", search_count, methods=["GET"]),

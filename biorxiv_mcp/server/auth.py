@@ -21,7 +21,7 @@ from .ratelimit import TokenBucket
 
 logger = logging.getLogger(__name__)
 
-_UNAUTHED_PATHS = frozenset({"/health"})
+_UNAUTHED_PATHS = frozenset({"/", "/health"})
 
 _KEY_RATE = float(os.environ.get("BIORXIV_MCP_KEY_RATE", "1.0"))
 _KEY_BURST = int(os.environ.get("BIORXIV_MCP_KEY_BURST", "60"))
