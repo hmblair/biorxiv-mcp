@@ -1,21 +1,22 @@
 """Bearer-token authentication and per-key rate limiting.
 
-API keys are supplied via ``BIORXIV_MCP_API_KEYS`` (comma-separated). They
-are hashed at startup and compared in constant time on each request.
+API keys are supplied via environment variables, hashed at startup, and
+looked up in constant time on each request. Each key carries an
+``unlimited`` flag controlling whether the per-key rate limit applies.
 
-If no keys are configured, the middleware allows all requests through but
-logs a warning — this preserves the local/stdio workflow where auth is
-unnecessary.
+If no keys are configured, the middleware allows all requests through
+but logs a warning — this preserves the local/stdio workflow where auth
+is unnecessary.
 """
 
 from __future__ import annotations
 
 import hashlib
-import hmac
 import logging
 import os
 import threading
-from collections.abc import Iterable
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -37,49 +38,68 @@ _ANON_RATE = float(os.environ.get("BIORXIV_MCP_ANON_RATE", "0.5"))
 _ANON_BURST = int(os.environ.get("BIORXIV_MCP_ANON_BURST", "30"))
 
 
-def _hash_key(raw: str) -> str:
+@dataclass(frozen=True, slots=True)
+class ApiKey:
+    """An authenticated API key.
+
+    ``hash`` is the SHA-256 hex digest of the raw token. ``unlimited``
+    keys bypass the per-key rate limit.
+    """
+    hash: str
+    unlimited: bool = False
+
+    @property
+    def key_id(self) -> str:
+        """Short, safe-to-log identifier (first 8 chars of the hash)."""
+        return self.hash[:8]
+
+
+def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def load_keys(env_value: str | None = None) -> set[str]:
-    """Load and hash API keys from the environment.
+def _split(env_value: str) -> list[str]:
+    return [t.strip() for t in env_value.split(",") if t.strip()]
 
-    Returns a set of SHA-256 hex digests. An empty set means auth is open.
+
+def load_keys(
+    api_env: str | None = None,
+    unlimited_env: str | None = None,
+) -> dict[str, ApiKey]:
+    """Load API keys from environment variables.
+
+    Reads ``BIORXIV_MCP_API_KEYS`` (rate-limited) and
+    ``BIORXIV_MCP_UNLIMITED_KEYS`` (bypass rate limiting). If a token
+    appears in both, the unlimited flag wins.
+
+    Returns a dict keyed by SHA-256 hex digest. An empty dict means
+    auth is disabled.
     """
-    if env_value is None:
-        env_value = os.environ.get("BIORXIV_MCP_API_KEYS", "")
-    keys = {_hash_key(k.strip()) for k in env_value.split(",") if k.strip()}
+    if api_env is None:
+        api_env = os.environ.get("BIORXIV_MCP_API_KEYS", "")
+    if unlimited_env is None:
+        unlimited_env = os.environ.get("BIORXIV_MCP_UNLIMITED_KEYS", "")
+    keys: dict[str, ApiKey] = {}
+    for raw in _split(api_env):
+        h = _hash_token(raw)
+        keys[h] = ApiKey(hash=h, unlimited=False)
+    for raw in _split(unlimited_env):
+        h = _hash_token(raw)
+        keys[h] = ApiKey(hash=h, unlimited=True)
     return keys
 
 
-def load_unlimited_keys(env_value: str | None = None) -> set[str]:
-    """Load API keys that bypass rate limiting (otherwise authenticated normally)."""
-    if env_value is None:
-        env_value = os.environ.get("BIORXIV_MCP_UNLIMITED_KEYS", "")
-    return {_hash_key(k.strip()) for k in env_value.split(",") if k.strip()}
-
-
-def _key_id(digest: str) -> str:
-    """Short, safe-to-log identifier for a key (first 8 chars of its hash)."""
-    return digest[:8]
+def hash_token(raw: str) -> str:
+    """Public helper: hash a raw token the same way keys are hashed."""
+    return _hash_token(raw)
 
 
 class BearerAuth(BaseHTTPMiddleware):
     """Validate ``Authorization: Bearer <token>`` and enforce per-key limits."""
 
-    def __init__(
-        self,
-        app,
-        keys: Iterable[str] | None = None,
-        unlimited_keys: Iterable[str] | None = None,
-    ):
+    def __init__(self, app, keys: Mapping[str, ApiKey] | None = None):
         super().__init__(app)
-        self._keys: set[str] = set(keys) if keys is not None else load_keys()
-        self._unlimited: set[str] = (
-            set(unlimited_keys) if unlimited_keys is not None else load_unlimited_keys()
-        )
-        # Unlimited keys are implicitly valid even if not listed in keys.
-        self._keys |= self._unlimited
+        self._keys: dict[str, ApiKey] = dict(keys) if keys is not None else load_keys()
         self._buckets: dict[str, TokenBucket] = {}
         self._lock = threading.Lock()
         if not self._keys:
@@ -88,8 +108,9 @@ class BearerAuth(BaseHTTPMiddleware):
                 "HTTP transport is OPEN. Set keys before exposing publicly."
             )
         else:
+            n_unlimited = sum(1 for k in self._keys.values() if k.unlimited)
             logger.info("Loaded %d API key(s) (%d unlimited)",
-                        len(self._keys), len(self._unlimited))
+                        len(self._keys), n_unlimited)
 
     @property
     def auth_enabled(self) -> bool:
@@ -140,17 +161,16 @@ class BearerAuth(BaseHTTPMiddleware):
                 headers={"WWW-Authenticate": 'Bearer realm="biorxiv-mcp"'},
             )
 
-        presented = _hash_key(auth[7:].strip())
-        if not any(hmac.compare_digest(presented, k) for k in self._keys):
+        key = self._keys.get(_hash_token(auth[7:].strip()))
+        if key is None:
             logger.warning("auth invalid ip=%s path=%s", client_ip, request.url.path)
             return JSONResponse({"error": "invalid token"}, status_code=403)
 
-        key_id = _key_id(presented)
-        if presented not in self._unlimited:
-            limited = self._rate_limit(f"key:{key_id}", _KEY_RATE, _KEY_BURST)
+        if not key.unlimited:
+            limited = self._rate_limit(f"key:{key.key_id}", _KEY_RATE, _KEY_BURST)
             if limited is not None:
-                logger.info("rate_limited key=%s ip=%s", key_id, client_ip)
+                logger.info("rate_limited key=%s ip=%s", key.key_id, client_ip)
                 return limited
 
-        request.state.key_id = key_id
+        request.state.key_id = key.key_id
         return await call_next(request)
