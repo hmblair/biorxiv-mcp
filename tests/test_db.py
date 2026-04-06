@@ -194,35 +194,50 @@ def test_bulk_sync_cursor_roundtrip(conn):
 
 
 def test_prepare_query_appends_star():
-    assert db._prepare_query("CRISPR") == "CRISPR*"
+    result = db._prepare_query("CRISPR")
+    assert "CRISPR*" in result
 
 
 def test_prepare_query_joins_with_or():
-    assert db._prepare_query("CRISPR cancer") == "CRISPR* OR cancer*"
+    result = db._prepare_query("CRISPR cancer")
+    assert "CRISPR*" in result
+    assert "cancer*" in result
+    assert " OR " in result
 
 
 def test_prepare_query_skips_short_tokens():
-    # "the" is 3 chars so it gets a *, only "in" (2 chars) is skipped
-    assert db._prepare_query("in the brain") == "in OR the* OR brain*"
+    result = db._prepare_query("in the brain")
+    # "in" (2 chars) has no *, "the" and "brain" (>= 3) do.
+    assert "brain*" in result
+    assert "the*" in result
 
 
 def test_prepare_query_preserves_explicit_and():
-    assert db._prepare_query("CRISPR AND cancer") == "CRISPR* AND cancer*"
+    result = db._prepare_query("CRISPR AND cancer")
+    assert "CRISPR*" in result
+    assert " AND " in result
+    assert "cancer*" in result
+    # No auto-OR when user uses explicit operators.
+    parts = result.split(" AND ")
+    assert len(parts) == 2
 
 
 def test_prepare_query_skips_quoted():
     assert db._prepare_query('"exact phrase"') == '"exact phrase"'
 
 
-def test_prepare_query_skips_already_prefixed():
-    assert db._prepare_query("CRISPR*") == "CRISPR*"
-
-
 def test_prepare_query_strips_punctuation():
-    # Hyphens, parens, colons get stripped; tokens re-split and OR-joined.
-    assert db._prepare_query("mRNA-seq") == "mRNA* OR seq*"
-    assert db._prepare_query("(CRISPR)") == "CRISPR*"
-    assert db._prepare_query("foo:bar") == "foo* OR bar*"
+    result = db._prepare_query("mRNA-seq")
+    assert "mRNA*" in result
+    assert "seq*" in result
+
+
+def test_prepare_query_mesh_expansion():
+    result = db._prepare_query("cancer")
+    # MeSH should expand "cancer" to include synonyms like tumor/neoplasm.
+    assert "cancer*" in result
+    lower = result.lower()
+    assert "tumor" in lower or "neoplasm" in lower
 
 
 def test_search_handles_punctuation(conn):

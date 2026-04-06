@@ -206,6 +206,8 @@ def _prepare_query(query: str) -> str:
     - Tokens are joined with ``OR`` so more keywords improve ranking
       without eliminating results. Use explicit ``AND`` for strict matching.
     - FTS5 operators (AND, OR, NOT, NEAR) are preserved.
+    - Multi-word terms are expanded with MeSH synonyms (e.g. "heart attack"
+      also matches "myocardial infarction").
     """
     if '"' in query:
         return query
@@ -228,7 +230,22 @@ def _prepare_query(query: str) -> str:
     if has_explicit_operator:
         # User wrote explicit operators — respect their intent.
         return " ".join(processed)
-    return " OR ".join(processed)
+    # Expand with MeSH synonyms: try the full query as a term, then
+    # individual tokens. Each synonym is quoted to match as a phrase.
+    from .mesh import expand as mesh_expand
+
+    synonyms = []
+    for syn in mesh_expand(sanitized.strip(), max_synonyms=3):
+        synonyms.append(f'"{syn}"')
+    for token in tokens:
+        if token and len(token) >= 3 and token.upper() not in _FTS5_OPERATORS:
+            for syn in mesh_expand(token, max_synonyms=2):
+                if " " in syn:
+                    synonyms.append(f'"{syn}"')
+                else:
+                    synonyms.append(syn + "*")
+    all_terms = processed + synonyms
+    return " OR ".join(all_terms)
 
 
 def _search_where(query: str, category: str | None, after: str | None, before: str | None):
