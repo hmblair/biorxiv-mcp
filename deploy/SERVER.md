@@ -113,11 +113,11 @@ All settings are env vars. Copy `deploy/biorxiv-mcp.env.example` to
 | `BIORXIV_MCP_KEY_BURST` | `60` | Per-key rate limit bucket size |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Trusted proxy IPs for `X-Forwarded-For` |
 | `LOG_LEVEL` | `INFO` | Log level |
-| `BIORXIV_MCP_DATA` | `~/.local/share/biorxiv-mcp` | Database directory |
+| `BIORXIV_MCP_DATA` | `~/.local/share/biorxiv-mcp/data` | Database directory |
 
 ## Database
 
-- **Location:** `~/.local/share/biorxiv-mcp/biorxiv.db`
+- **Location:** `~/.local/share/biorxiv-mcp/data/biorxiv.db`
 - **Permissions:** directory 700, files 600 (enforced in code)
 - **Contents:** papers table, FTS5 index, sync metadata, API keys
 - **API key storage:** SHA-256 hashes only — raw tokens are never stored

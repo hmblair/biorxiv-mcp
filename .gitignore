@@ -4,3 +4,4 @@ __pycache__/
 *.db
 uv.lock
 deploy/biorxiv-mcp.env
+mesh_synonyms.gz

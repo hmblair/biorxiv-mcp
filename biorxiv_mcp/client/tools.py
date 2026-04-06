@@ -14,6 +14,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from .api import ApiError, BiorxivApi
+from .config import get_api_key, get_url
 
 logger = logging.getLogger(__name__)
 
@@ -25,15 +26,13 @@ mcp = FastMCP("biorxiv")
 
 
 def _api() -> BiorxivApi:
-    """Construct a client from env vars on each call.
+    """Construct a client from config on each call.
 
     Using a fresh client per call avoids stale-connection issues over
     long-lived stdio sessions. httpx.Client handles connection pooling
     internally.
     """
-    base_url = os.environ.get("BIORXIV_API_URL", "http://localhost:8000")
-    api_key = os.environ.get("BIORXIV_API_KEY", "")
-    return BiorxivApi(base_url, api_key=api_key or None)
+    return BiorxivApi(get_url(), api_key=get_api_key())
 
 
 def _api_call(fn):

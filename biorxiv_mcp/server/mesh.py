@@ -12,16 +12,16 @@ from __future__ import annotations
 
 import gzip
 import logging
-import os
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from .db import DB_DIR
+
 logger = logging.getLogger(__name__)
 
 MESH_URL = "https://nlmpubs.nlm.nih.gov/projects/mesh/MESH_FILES/xmlmesh/desc2026.gz"
-MESH_CACHE_DIR = Path(os.environ.get("BIORXIV_MCP_DATA", Path.home() / ".local/share/biorxiv-mcp"))
-MESH_CACHE_FILE = MESH_CACHE_DIR / "mesh_synonyms.gz"
+MESH_CACHE_FILE = DB_DIR / "mesh_synonyms.gz"
 
 # Lowercase term -> set of lowercase synonyms (including the canonical name).
 _synonyms: dict[str, set[str]] | None = None

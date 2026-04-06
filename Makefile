@@ -9,7 +9,7 @@ SERVICE := biorxiv-mcp
 BIORXIV_API_URL ?= $(if $(BIORXIV_MCP_ENDPOINT),$(BIORXIV_MCP_ENDPOINT),http://localhost:8000)
 BIORXIV_API_KEY ?= $(BIORXIV_MCP_ENDPOINT_KEY)
 
-.PHONY: install uninstall install-agents uninstall-agents install-service uninstall-service start stop restart status test test-endpoint
+.PHONY: install uninstall install-agents uninstall-agents install-service uninstall-service start stop restart status test test-client test-server test-endpoint
 
 # Register the stdio MCP shim with Claude Code, Claude Desktop, and OpenCode.
 # Local:   make install
@@ -72,9 +72,15 @@ status:
 test: $(VENV)
 	$(VENV)/bin/pytest -q
 
+test-client: $(VENV)
+	$(VENV)/bin/pytest -q tests/client
+
+test-server: $(VENV)
+	$(VENV)/bin/pytest -q tests/server
+
 test-endpoint: $(VENV)
 	BIORXIV_MCP_ENDPOINT="$(BIORXIV_API_URL)" BIORXIV_MCP_ENDPOINT_KEY="$(BIORXIV_API_KEY)" \
-	    $(VENV)/bin/pytest -v tests/test_endpoint.py
+	    $(VENV)/bin/pytest -v tests/client/test_endpoint.py
 
 $(VENV):
 	python3 -m venv $(VENV)

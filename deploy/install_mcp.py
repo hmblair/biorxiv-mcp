@@ -2,10 +2,8 @@
 """Register/unregister the biorxiv-mcp stdio shim with agent tools.
 
 The shim is a local stdio process that proxies MCP tool calls to a
-remote REST API. Two env vars configure it at runtime:
-
-    BIORXIV_API_URL   — base URL of the server (e.g. https://biorxiv.example.com)
-    BIORXIV_API_KEY   — bearer token (optional for localhost)
+remote REST API. Connection settings are read from the config file
+(~/.config/biorxiv-mcp/config.toml) and can be overridden with flags.
 
 Usage:
     install_mcp.py install [--url ...] [--key ...] [--name ...]
@@ -20,6 +18,11 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+# Allow importing from the package tree.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from biorxiv_mcp.client.config import get_api_key, get_url
+from biorxiv_mcp.client.config import save as save_config
 
 HOME = Path.home()
 
@@ -65,8 +68,8 @@ def _env_dict(url: str, key: str | None) -> dict[str, str]:
 
 def _preflight(url: str, key: str | None) -> bool:
     """Quick check that the server is reachable."""
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     health_url = url.rstrip("/") + "/health"
     req = urllib.request.Request(health_url)
@@ -168,8 +171,8 @@ def main() -> int:
 
     print()
     if args.action == "install":
-        url = args.url or "http://localhost:8000"
-        key = args.key or ""
+        url = args.url or get_url()
+        key = args.key or get_api_key() or ""
         shim = _find_shim()
 
         print(f"  Endpoint: {url}")
@@ -181,6 +184,10 @@ def main() -> int:
         print()
 
         env = _env_dict(url, key or None)
+        cfg = save_config(url, key or None)
+        print(f"  Config saved to {cfg}")
+        print()
+
         install_claude_code(args.name, shim, env)
         install_claude_desktop(args.name, shim, env)
         install_opencode(args.name, shim, env)
