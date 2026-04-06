@@ -197,34 +197,43 @@ def _sanitize_token(token: str) -> str:
     return "".join(c if c.isalnum() or c == "_" else " " for c in token)
 
 
-def _add_prefix_matching(query: str) -> str:
-    """Append * to tokens >= 3 chars that aren't FTS5 operators or already prefixed.
+def _prepare_query(query: str) -> str:
+    """Prepare a user query for FTS5 MATCH.
 
-    Also strips FTS5 special characters from bare tokens so agent-typed input
-    with punctuation (hyphens, parentheses, colons) doesn't raise a syntax
-    error. Quoted phrases are passed through unchanged.
+    - Quoted phrases are passed through unchanged.
+    - Bare tokens are sanitized (punctuation stripped) and prefix-matched
+      (``*`` appended to tokens >= 3 chars).
+    - Tokens are joined with ``OR`` so more keywords improve ranking
+      without eliminating results. Use explicit ``AND`` for strict matching.
+    - FTS5 operators (AND, OR, NOT, NEAR) are preserved.
     """
     if '"' in query:
         return query
     # Re-tokenize after sanitization so ``mRNA-seq`` becomes two tokens.
     sanitized = " ".join(_sanitize_token(t) for t in query.split())
     tokens = sanitized.split()
-    result = []
+    # Build token list, then join non-operator tokens with OR.
+    processed = []
+    has_explicit_operator = False
     for token in tokens:
         if not token:
             continue
         if token.upper() in _FTS5_OPERATORS:
-            result.append(token)
+            processed.append(token)
+            has_explicit_operator = True
         elif len(token) >= 3:
-            result.append(token + "*")
+            processed.append(token + "*")
         else:
-            result.append(token)
-    return " ".join(result)
+            processed.append(token)
+    if has_explicit_operator:
+        # User wrote explicit operators — respect their intent.
+        return " ".join(processed)
+    return " OR ".join(processed)
 
 
 def _search_where(query: str, category: str | None, after: str | None, before: str | None):
     """Build the WHERE clause and params for search queries."""
-    fts_query = _add_prefix_matching(query)
+    fts_query = _prepare_query(query)
     if not fts_query.strip():
         # FTS5 rejects empty MATCH strings; use a token that never matches.
         fts_query = "__no_match__"

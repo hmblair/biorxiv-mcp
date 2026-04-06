@@ -69,12 +69,29 @@ def search_biorxiv(
 ) -> list[dict] | dict:
     """Search bioRxiv/medRxiv papers by keyword.
 
-    Uses full-text search on titles, abstracts, and authors.
-    Returns compact results (doi, title, authors, date, category) by default.
-    Set detail=True to include abstract, institution, license, and other fields.
+    Searches titles, abstracts, authors, and institutions. Keywords are
+    joined with OR by default, so more keywords improve ranking without
+    eliminating results. Use explicit AND for strict matching.
+
+    Returns compact results (doi, title, authors, date, category) by
+    default. Set detail=True to include abstract, institution, license,
+    and other fields.
+
+    Query syntax:
+        - Multiple words: "CRISPR mRNA degradation" (OR, ranked by relevance)
+        - Require all terms: "CRISPR AND cancer"
+        - Exclude terms: "CRISPR NOT cas9"
+        - Exact phrase: '"single cell RNA"'
+        - Proximity: "NEAR(CRISPR cancer, 5)"
+        - Prefix matching is automatic for words >= 3 characters
+
+    Tips:
+        - Use distinctive keywords (author names, specific methods)
+        - Prefer fewer specific terms over many generic ones
+        - Combine with category/date filters to narrow results
 
     Args:
-        query: Search query (supports prefix matching and FTS5 syntax, e.g. "CRISPR AND cancer")
+        query: Search keywords or FTS5 query expression
         limit: Max results to return (default 10, capped at 100)
         category: Filter by category (e.g. "neuroscience", "genomics").
             Use biorxiv_categories() to list available categories.

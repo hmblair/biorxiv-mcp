@@ -193,32 +193,36 @@ def test_bulk_sync_cursor_roundtrip(conn):
 # -- prefix matching ----------------------------------------------------------
 
 
-def test_prefix_matching_appends_star():
-    assert db._add_prefix_matching("CRISPR") == "CRISPR*"
+def test_prepare_query_appends_star():
+    assert db._prepare_query("CRISPR") == "CRISPR*"
 
 
-def test_prefix_matching_skips_short_tokens():
+def test_prepare_query_joins_with_or():
+    assert db._prepare_query("CRISPR cancer") == "CRISPR* OR cancer*"
+
+
+def test_prepare_query_skips_short_tokens():
     # "the" is 3 chars so it gets a *, only "in" (2 chars) is skipped
-    assert db._add_prefix_matching("in the brain") == "in the* brain*"
+    assert db._prepare_query("in the brain") == "in OR the* OR brain*"
 
 
-def test_prefix_matching_skips_operators():
-    assert db._add_prefix_matching("CRISPR AND cancer") == "CRISPR* AND cancer*"
+def test_prepare_query_preserves_explicit_and():
+    assert db._prepare_query("CRISPR AND cancer") == "CRISPR* AND cancer*"
 
 
-def test_prefix_matching_skips_quoted():
-    assert db._add_prefix_matching('"exact phrase"') == '"exact phrase"'
+def test_prepare_query_skips_quoted():
+    assert db._prepare_query('"exact phrase"') == '"exact phrase"'
 
 
-def test_prefix_matching_skips_already_prefixed():
-    assert db._add_prefix_matching("CRISPR*") == "CRISPR*"
+def test_prepare_query_skips_already_prefixed():
+    assert db._prepare_query("CRISPR*") == "CRISPR*"
 
 
-def test_prefix_matching_strips_punctuation():
-    # Hyphens, parens, colons get stripped; tokens re-split.
-    assert db._add_prefix_matching("mRNA-seq") == "mRNA* seq*"
-    assert db._add_prefix_matching("(CRISPR)") == "CRISPR*"
-    assert db._add_prefix_matching("foo:bar") == "foo* bar*"
+def test_prepare_query_strips_punctuation():
+    # Hyphens, parens, colons get stripped; tokens re-split and OR-joined.
+    assert db._prepare_query("mRNA-seq") == "mRNA* OR seq*"
+    assert db._prepare_query("(CRISPR)") == "CRISPR*"
+    assert db._prepare_query("foo:bar") == "foo* OR bar*"
 
 
 def test_search_handles_punctuation(conn):
