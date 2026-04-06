@@ -81,6 +81,45 @@ def _load() -> dict[str, set[str]]:
     return _synonyms
 
 
+def is_term(text: str) -> bool:
+    """True if ``text`` is a known MeSH term (exact, case-insensitive)."""
+    return text.lower() in _load()
+
+
+def find_phrases(words: list[str], max_phrase_len: int = 3) -> list[str | list[str]]:
+    """Group consecutive words into MeSH phrases using greedy longest-match.
+
+    Scans ``words`` with a sliding window (longest first). When a window
+    matches a MeSH term, those words are grouped as a single phrase and
+    the scan skips ahead.
+
+    Returns a list where each element is either:
+    - A ``str`` (single unmatched word)
+    - A ``list[str]`` (words that form a MeSH phrase)
+
+    Example::
+
+        >>> find_phrases(["ribonucleic", "acid", "cancer"])
+        [["ribonucleic", "acid"], "cancer"]
+    """
+    table = _load()
+    result: list[str | list[str]] = []
+    i = 0
+    while i < len(words):
+        matched = False
+        for window in range(min(max_phrase_len, len(words) - i), 1, -1):
+            candidate = " ".join(words[i : i + window]).lower()
+            if candidate in table:
+                result.append(words[i : i + window])
+                i += window
+                matched = True
+                break
+        if not matched:
+            result.append(words[i])
+            i += 1
+    return result
+
+
 def expand(term: str, max_synonyms: int = 5) -> list[str]:
     """Return up to ``max_synonyms`` MeSH synonyms for a term.
 

@@ -43,7 +43,7 @@ Once installed, your agent has access to these tools:
 
 | Tool | What it does |
 |---|---|
-| `search_biorxiv` | Full-text search across titles, abstracts, authors, and institutions. Supports `AND`/`OR`/`NEAR`, quoted phrases, prefix matching, category and date filters, sort by relevance or date. |
+| `search_biorxiv` | Full-text search across titles, abstracts, authors, and institutions. PubMed-like behavior: implicit AND, MeSH synonym expansion, quoted phrases, hyphenated terms, category and date filters, sort by relevance or date. |
 | `search_biorxiv_count` | Count matches without returning results — useful for narrowing filters before searching. |
 | `biorxiv_categories` | List all categories with paper counts. |
 | `get_paper` | Get full metadata for a paper by DOI. Falls back to the bioRxiv API for papers not yet synced. |
@@ -53,8 +53,10 @@ Once installed, your agent has access to these tools:
 
 ### Example queries
 
-- `search_biorxiv("CRISPR AND cancer", sort="date", after="2025-01-01")`
-- `search_biorxiv("single-cell RNA", category="genomics", limit=20, detail=True)`
+- `search_biorxiv("CRISPR cancer")` — finds papers with both (AND)
+- `search_biorxiv("heart attack")` — also finds "myocardial infarction" via MeSH
+- `search_biorxiv("mRNA-seq", category="genomics", after="2024-01-01")`
+- `search_biorxiv("CRISPR OR cancer")` — explicit OR for either term
 - `get_paper("10.1101/2024.01.05.574328")`
 
 ## Troubleshooting

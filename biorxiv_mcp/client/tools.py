@@ -69,26 +69,30 @@ def search_biorxiv(
 ) -> list[dict] | dict:
     """Search bioRxiv/medRxiv papers by keyword.
 
-    Searches titles, abstracts, authors, and institutions. Keywords are
-    joined with OR by default, so more keywords improve ranking without
-    eliminating results. Use explicit AND for strict matching.
+    Searches titles, abstracts, authors, and institutions. Works like
+    PubMed: all keywords must match (implicit AND), and each keyword is
+    automatically expanded with MeSH synonyms so "cancer" also finds
+    "tumor" and "neoplasm".
 
     Returns compact results (doi, title, authors, date, category) by
     default. Set detail=True to include abstract, institution, license,
     and other fields.
 
     Query syntax:
-        - Multiple words: "CRISPR mRNA degradation" (OR, ranked by relevance)
-        - Require all terms: "CRISPR AND cancer"
+        - Multiple words: "CRISPR cancer" (implicit AND — both required)
+        - Explicit OR: "CRISPR OR cancer" (either matches)
         - Exclude terms: "CRISPR NOT cas9"
         - Exact phrase: '"single cell RNA"'
-        - Proximity: "NEAR(CRISPR cancer, 5)"
-        - Prefix matching is automatic for words >= 3 characters
+        - Hyphenated terms: "mRNA-seq" (matched as a phrase)
+        - Prefix/truncation: "CRISPR*" (matches CRISPRi, etc.)
+        - MeSH expansion is automatic (cancer → tumor, neoplasm, ...)
+        - Multi-word MeSH terms are recognized: "ribonucleic acid"
+          is grouped and expanded to include "RNA"
 
     Tips:
         - Use distinctive keywords (author names, specific methods)
-        - Prefer fewer specific terms over many generic ones
-        - Combine with category/date filters to narrow results
+        - More keywords narrow results (AND behavior), unlike OR search
+        - Combine with category/date filters to narrow further
 
     Args:
         query: Search keywords or FTS5 query expression

@@ -188,74 +188,120 @@ def upsert_papers(conn: sqlite3.Connection, papers: list[dict]) -> int:
 _FTS5_OPERATORS = {"AND", "OR", "NOT", "NEAR"}
 
 
-def _sanitize_token(token: str) -> str:
-    """Strip FTS5 special characters from a raw token.
+# -- Query preparation pipeline -----------------------------------------------
+#
+# Pipeline: raw query → sanitize → group MeSH phrases → expand → build clauses
+#
+# The result is a list of FTS5 MATCH expressions joined by SQL AND.
+# Each clause is one search term expanded with MeSH synonyms:
+#
+#   WHERE papers_fts MATCH 'cancer OR tumor OR neoplasm'
+#     AND papers_fts MATCH 'CRISPR'
 
-    Keeps alphanumerics and underscores; replaces other punctuation with
-    spaces so a token like ``mRNA-seq`` becomes ``mRNA seq``.
+
+def _sanitize_token(raw: str) -> str:
+    """Clean a single whitespace-delimited token for FTS5.
+
+    Hyphenated compounds (``mRNA-seq``) become quoted phrases so they
+    match the adjacent tokens FTS5 indexed. Other punctuation is stripped.
+    Explicit wildcards (``CRISPR*``) are preserved.
     """
-    return "".join(c if c.isalnum() or c == "_" else " " for c in token)
+    cleaned = "".join(c if c.isalnum() or c in ("_", "*") else " " for c in raw)
+    parts = cleaned.split()
+    if "-" in raw and len(parts) > 1:
+        return '"' + " ".join(parts) + '"'
+    return cleaned
 
 
-def _prepare_query(query: str) -> str:
-    """Prepare a user query for FTS5 MATCH.
+def _sanitize(query: str) -> list[str]:
+    """Sanitize a raw query into a flat list of clean words and phrases.
 
-    - Quoted phrases are passed through unchanged.
-    - Bare tokens are sanitized (punctuation stripped) and prefix-matched
-      (``*`` appended to tokens >= 3 chars).
-    - Tokens are joined with ``OR`` so more keywords improve ranking
-      without eliminating results. Use explicit ``AND`` for strict matching.
-    - FTS5 operators (AND, OR, NOT, NEAR) are preserved.
-    - Multi-word terms are expanded with MeSH synonyms (e.g. "heart attack"
-      also matches "myocardial infarction").
+    User-quoted phrases are returned as a single element. Hyphenated
+    compounds become quoted phrase tokens via ``_sanitize_token``.
+    Everything else is split on whitespace after stripping punctuation.
     """
     if '"' in query:
-        return query
-    # Re-tokenize after sanitization so ``mRNA-seq`` becomes two tokens.
-    sanitized = " ".join(_sanitize_token(t) for t in query.split())
-    tokens = sanitized.split()
-    # Build token list, then join non-operator tokens with OR.
-    processed = []
-    has_explicit_operator = False
-    for token in tokens:
-        if not token:
-            continue
-        if token.upper() in _FTS5_OPERATORS:
-            processed.append(token)
-            has_explicit_operator = True
-        elif len(token) >= 3:
-            processed.append(token + "*")
+        return [query]
+    words = []
+    for raw in query.split():
+        sanitized = _sanitize_token(raw)
+        if sanitized.startswith('"'):
+            # Phrase from hyphen sanitization — keep as one token.
+            words.append(sanitized)
         else:
-            processed.append(token)
-    if has_explicit_operator:
-        # User wrote explicit operators — respect their intent.
-        return " ".join(processed)
-    # Expand with MeSH synonyms: try the full query as a term, then
-    # individual tokens. Each synonym is quoted to match as a phrase.
-    from .mesh import expand as mesh_expand
+            for w in sanitized.split():
+                if w:
+                    words.append(w)
+    return words
 
-    synonyms = []
-    for syn in mesh_expand(sanitized.strip(), max_synonyms=3):
-        synonyms.append(f'"{syn}"')
-    for token in tokens:
-        if token and len(token) >= 3 and token.upper() not in _FTS5_OPERATORS:
-            for syn in mesh_expand(token, max_synonyms=2):
-                if " " in syn:
-                    synonyms.append(f'"{syn}"')
-                else:
-                    synonyms.append(syn + "*")
-    all_terms = processed + synonyms
-    return " OR ".join(all_terms)
+
+def _expand_term(term: str, mesh_expand) -> str:
+    """Expand a single term (word or phrase) with MeSH synonyms.
+
+    Returns an FTS5 OR expression: ``cancer OR tumor OR neoplasm``.
+    Multi-word terms and synonyms are quoted for phrase matching.
+    """
+    parts = [f'"{term}"' if " " in term else term]
+    for syn in mesh_expand(term, max_synonyms=3):
+        parts.append(f'"{syn}"' if " " in syn else syn)
+    return " OR ".join(parts)
+
+
+def _build_match_clauses(query: str) -> list[str]:
+    """Convert a user query into a list of FTS5 MATCH expressions.
+
+    Each clause is one search term expanded with MeSH synonyms.
+    Clauses are AND-joined in the SQL WHERE, giving PubMed-like
+    implicit AND with per-term synonym expansion.
+
+    Multi-word MeSH terms (e.g. "ribonucleic acid") are detected
+    by a greedy longest-match scan and grouped as a single clause.
+
+    Queries with explicit FTS5 operators (AND, OR, NOT, NEAR) are
+    passed through as a single clause with no expansion.
+    """
+    from .mesh import expand as mesh_expand
+    from .mesh import find_phrases
+
+    words = _sanitize(query)
+    if not words:
+        return ["__no_match__"]
+    if len(words) == 1 and words[0].startswith('"'):
+        return [words[0]]
+    if any(w.upper() in _FTS5_OPERATORS for w in words if not w.startswith('"')):
+        return [" ".join(words)]
+
+    # Separate pre-existing phrases (from hyphen sanitization) from plain
+    # words. Only plain words go through MeSH phrase detection.
+    plain_words = [w for w in words if not w.startswith('"')]
+    phrase_tokens = [w for w in words if w.startswith('"')]
+    grouped = find_phrases(plain_words)
+    clauses = []
+    for token in phrase_tokens:
+        # Already a quoted phrase — use as a MATCH clause directly.
+        clauses.append(token)
+    for item in grouped:
+        if isinstance(item, list):
+            clauses.append(_expand_term(" ".join(item), mesh_expand))
+        else:
+            clauses.append(_expand_term(item, mesh_expand))
+    return clauses
 
 
 def _search_where(query: str, category: str | None, after: str | None, before: str | None):
-    """Build the WHERE clause and params for search queries."""
-    fts_query = _prepare_query(query)
-    if not fts_query.strip():
-        # FTS5 rejects empty MATCH strings; use a token that never matches.
-        fts_query = "__no_match__"
-    where = "papers_fts MATCH ?"
-    params: list = [fts_query]
+    """Build the WHERE clause and params for search queries.
+
+    Each search term becomes a separate ``papers_fts MATCH ?`` clause
+    joined by AND. Within each clause, the term and its MeSH synonyms
+    are OR-joined.
+    """
+    clauses = _build_match_clauses(query)
+    match_parts = []
+    params: list = []
+    for clause in clauses:
+        match_parts.append("papers_fts MATCH ?")
+        params.append(clause)
+    where = " AND ".join(match_parts)
     if category:
         where += " AND p.category = ?"
         params.append(category)
@@ -279,8 +325,8 @@ def search_count(
     where, params = _search_where(query, category, after, before)
     sql = f"""
         SELECT COUNT(*)
-        FROM papers_fts f
-        JOIN papers p ON p.rowid = f.rowid
+        FROM papers_fts
+        JOIN papers p ON p.rowid = papers_fts.rowid
         WHERE {where}
     """
     return conn.execute(sql, params).fetchone()[0]
@@ -305,8 +351,8 @@ def search(
     order = "rank" if sort == "relevance" else "p.date DESC"
     sql = f"""
         SELECT {columns}
-        FROM papers_fts f
-        JOIN papers p ON p.rowid = f.rowid
+        FROM papers_fts
+        JOIN papers p ON p.rowid = papers_fts.rowid
         WHERE {where}
         ORDER BY {order} LIMIT ?
     """

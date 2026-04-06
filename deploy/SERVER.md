@@ -61,18 +61,15 @@ biorxiv-mcp-server keys import --label "legacy" --token <raw-token> --unlimited
 # List all active keys
 biorxiv-mcp-server keys list
 
-# Include revoked keys
-biorxiv-mcp-server keys list --all
-
-# Revoke a key by its ID prefix
-biorxiv-mcp-server keys revoke <key_id>
+# Delete a key by its ID prefix
+biorxiv-mcp-server keys delete <key_id>
 ```
 
 When any keys exist in the database, all `/api/*` requests require
 `Authorization: Bearer <token>`. `/health` is always unauthenticated.
 
-Revoking all keys locks out everyone — it does not revert to open mode.
-Open mode (no auth) only applies to a fresh install with no keys.
+Deleting all keys means no one can authenticate. Auth is only
+disabled on a fresh install before any keys are created.
 
 ## REST API
 
@@ -133,7 +130,8 @@ biorxiv_mcp/
     app.py          # Starlette REST API routes
     auth.py         # Bearer-token middleware (reads keys from DB)
     db.py           # SQLite schema, FTS5 index, connection management
-    keys.py         # API key CRUD (generate, import, list, revoke)
+    mesh.py         # MeSH synonym expansion (auto-downloaded from NLM)
+    keys.py         # API key CRUD (generate, import, list, delete)
     sync.py         # bioRxiv API client (bulk, delta, auto, resolve)
     ratelimit.py    # Token bucket
     sync_runner.py  # Standalone sync CLI
