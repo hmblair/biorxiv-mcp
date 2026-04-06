@@ -62,11 +62,6 @@ def test_categories(_mock_api):
     assert tools.biorxiv_categories()[0]["category"] == "genomics"
 
 
-def test_status(_mock_api):
-    _mock_api.status.return_value = {"paper_count": 100}
-    assert tools.biorxiv_status()["paper_count"] == 100
-
-
 def test_download_writes_file(_mock_api, tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "PAPERS_DIR", tmp_path)
     _mock_api.download_pdf.return_value = b"%PDF-fake-content"

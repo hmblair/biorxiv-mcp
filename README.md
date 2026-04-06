@@ -43,13 +43,10 @@ Once installed, your agent has access to these tools:
 
 | Tool | What it does |
 |---|---|
-| `search_biorxiv` | Full-text search across titles, abstracts, authors, and institutions. PubMed-like behavior: implicit AND, MeSH synonym expansion, quoted phrases, hyphenated terms, category and date filters, sort by relevance or date. |
-| `search_biorxiv_count` | Count matches without returning results — useful for narrowing filters before searching. |
+| `search_biorxiv` | Full-text search across titles, abstracts, authors, and institutions. PubMed-like: implicit AND, MeSH synonym expansion, quoted phrases, hyphenated terms, category and date filters. |
 | `biorxiv_categories` | List all categories with paper counts. |
-| `get_paper` | Get full metadata for a paper by DOI. Falls back to the bioRxiv API for papers not yet synced. |
-| `download_paper` | Download a paper's PDF to `~/. local/share/biorxiv-mcp/papers/`. |
-| `sync_biorxiv` | Trigger a database sync on the server (admin use). |
-| `biorxiv_status` | Check paper count, last sync date, and sync status. |
+| `get_paper` | Get full metadata for a paper by DOI (title, authors, abstract, institution, license, etc.). |
+| `download_paper` | Download a paper's PDF to `~/.local/share/biorxiv-mcp/papers/`. |
 
 ### Example queries
 

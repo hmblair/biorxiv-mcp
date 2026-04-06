@@ -125,27 +125,6 @@ def search_biorxiv(
 
 @mcp.tool()
 @_api_call
-def search_biorxiv_count(
-    query: str,
-    category: str | None = None,
-    after: str | None = None,
-    before: str | None = None,
-) -> dict:
-    """Count how many papers match a query without returning them.
-
-    Useful for gauging result size before searching, or for narrowing filters.
-
-    Args:
-        query: Search query (same syntax as search_biorxiv)
-        category: Filter by category
-        after: Only papers on or after this date (YYYY-MM-DD)
-        before: Only papers on or before this date (YYYY-MM-DD)
-    """
-    return _api().search_count(query, category=category, after=after, before=before)
-
-
-@mcp.tool()
-@_api_call
 def biorxiv_categories() -> list[dict] | dict:
     """List all bioRxiv/medRxiv categories with paper counts."""
     return _api().categories()
@@ -154,9 +133,10 @@ def biorxiv_categories() -> list[dict] | dict:
 @mcp.tool()
 @_api_call
 def get_paper(doi: str) -> dict:
-    """Get detailed information for a paper by DOI.
+    """Get detailed metadata for a paper by DOI.
 
-    Checks the local database first, then falls back to the bioRxiv API
+    Returns all fields: title, authors, abstract, date, category,
+    institution, license, version, etc. Falls back to the bioRxiv API
     for papers that haven't been synced yet.
 
     Args:
@@ -181,22 +161,3 @@ def download_paper(doi: str) -> dict:
     out = PAPERS_DIR / f"{safe}.pdf"
     out.write_bytes(pdf)
     return {"path": str(out), "size_mb": round(len(pdf) / (1024 * 1024), 2)}
-
-
-@mcp.tool()
-@_api_call
-async def sync_biorxiv() -> dict:
-    """Start a background sync of papers from bioRxiv/medRxiv.
-
-    Returns immediately. Poll ``biorxiv_status()`` to see progress.
-    Delta sync runs if the DB has been synced before; otherwise bulk sync
-    (which can take several hours).
-    """
-    return _api().sync()
-
-
-@mcp.tool()
-@_api_call
-def biorxiv_status() -> dict:
-    """Get the status of the local bioRxiv database."""
-    return _api().status()
