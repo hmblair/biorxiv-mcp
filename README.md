@@ -56,6 +56,19 @@ Once installed, your agent has access to these tools:
 - `search_biorxiv("CRISPR OR cancer")` — explicit OR for either term
 - `get_paper("10.1101/2024.01.05.574328")`
 
+## Agent
+
+`make install` also installs a Claude Code agent (`biorxiv`) that can
+search for papers relevant to a research topic. It works by browsing
+recent titles across categories and using its judgment to identify
+relevant papers, rather than relying solely on keyword matching.
+
+Invoke it with `@agent-biorxiv` or let Claude delegate automatically:
+
+```
+@agent-biorxiv Find papers from the past week about RNA structure prediction
+```
+
 ## Troubleshooting
 
 **"Connection error" in tool output** — the shim can't reach the server.

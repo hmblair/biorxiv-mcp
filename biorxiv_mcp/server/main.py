@@ -94,7 +94,12 @@ def _keys_delete(args: argparse.Namespace) -> None:
     from . import db, keys
 
     conn = db.get_connection()
-    key = keys.delete(conn, args.key_id)
+    try:
+        key = keys.delete(conn, args.key_id)
+    except ValueError as e:
+        conn.close()
+        print(f"\n{e}\n")
+        sys.exit(1)
     conn.close()
     if key is None:
         print(f"\nNo key found matching '{args.key_id}'.\n")

@@ -173,7 +173,39 @@ def init_db(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL
         );
     """)
+    _run_migrations(conn)
     _initialized_ids.add(id(conn))
+
+
+# -- Schema migrations --------------------------------------------------------
+
+SCHEMA_VERSION = 1
+
+
+def _get_schema_version(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT value FROM sync_meta WHERE key = 'schema_version'"
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _set_schema_version(conn: sqlite3.Connection, version: int) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('schema_version', ?)",
+        (str(version),),
+    )
+    conn.commit()
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Apply any pending schema migrations."""
+    current = _get_schema_version(conn)
+    if current >= SCHEMA_VERSION:
+        return
+    # Migration 0 -> 1: initial schema (already created above via IF NOT EXISTS).
+    if current < 1:
+        _set_schema_version(conn, 1)
+    logger.info("Schema migrated from v%d to v%d", current, SCHEMA_VERSION)
 
 
 def upsert_papers(conn: sqlite3.Connection, papers: list[dict]) -> int:

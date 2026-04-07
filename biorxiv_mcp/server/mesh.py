@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import gzip
 import logging
+import threading
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -25,6 +26,7 @@ MESH_CACHE_FILE = DB_DIR / "mesh_synonyms.gz"
 
 # Lowercase term -> set of lowercase synonyms (including the canonical name).
 _synonyms: dict[str, set[str]] | None = None
+_load_lock = threading.Lock()
 
 
 def _download_mesh_xml(dest: Path) -> Path:
@@ -72,13 +74,16 @@ def _load() -> dict[str, set[str]]:
     global _synonyms
     if _synonyms is not None:
         return _synonyms
-    try:
-        xml_path = _download_mesh_xml(MESH_CACHE_FILE)
-        _synonyms = _build_synonym_table(xml_path)
-    except Exception:
-        logger.warning("Failed to load MeSH synonyms; query expansion disabled", exc_info=True)
-        _synonyms = {}
-    return _synonyms
+    with _load_lock:
+        if _synonyms is not None:
+            return _synonyms
+        try:
+            xml_path = _download_mesh_xml(MESH_CACHE_FILE)
+            _synonyms = _build_synonym_table(xml_path)
+        except Exception:
+            logger.warning("Failed to load MeSH synonyms; query expansion disabled", exc_info=True)
+            _synonyms = {}
+        return _synonyms
 
 
 def is_term(text: str) -> bool:

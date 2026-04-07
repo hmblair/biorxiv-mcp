@@ -11,6 +11,7 @@ import logging
 import os
 from pathlib import Path
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 
 from .api import ApiError, BiorxivApi
@@ -45,7 +46,7 @@ def _api_call(fn):
             return fn(*args, **kwargs)
         except ApiError as e:
             return {"error": str(e)}
-        except Exception as e:
+        except (OSError, httpx.HTTPError) as e:
             logger.exception("Unexpected error in %s", fn.__name__)
             return {"error": f"Connection error: {e}"}
 

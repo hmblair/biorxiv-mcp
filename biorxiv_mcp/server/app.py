@@ -19,7 +19,7 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from . import db, sync
@@ -192,7 +192,7 @@ async def get_paper(request: Request) -> Response:
         return _error(str(e))
     try:
         with db.connection() as conn:
-            paper = sync.resolve_paper(conn, doi)
+            paper = await sync.resolve_paper(conn, doi)
     except sqlite3.Error as e:
         return _error(f"Database error: {e}", 500)
     if paper is None:
@@ -207,7 +207,7 @@ async def download_pdf(request: Request) -> Response:
         return _error(str(e))
     try:
         with db.connection() as conn:
-            paper = sync.resolve_paper(conn, doi)
+            paper = await sync.resolve_paper(conn, doi)
     except sqlite3.Error as e:
         return _error(f"Database error: {e}", 500)
     if paper is None:
@@ -215,30 +215,25 @@ async def download_pdf(request: Request) -> Response:
 
     url = sync.pdf_url(doi, paper.get("server") or sync.DEFAULT_SERVER, paper.get("version") or 1)
 
-    async def _stream():
-        total = 0
-        try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
-                async with client.stream("GET", url) as resp:
-                    if resp.status_code != 200:
-                        return
-                    clen = resp.headers.get("content-length")
-                    if clen and int(clen) > MAX_PDF_BYTES:
-                        return
-                    first = True
-                    async for chunk in resp.aiter_bytes():
-                        if first:
-                            if not chunk.startswith(b"%PDF"):
-                                return
-                            first = False
-                        total += len(chunk)
-                        if total > MAX_PDF_BYTES:
-                            return
-                        yield chunk
-        except httpx.HTTPError as e:
-            logger.error("PDF fetch failed for %s: %s", doi, e)
+    try:
+        client = httpx.AsyncClient(follow_redirects=True, timeout=60.0)
+        resp = await client.get(url)
+    except httpx.HTTPError as e:
+        logger.error("PDF fetch failed for %s: %s", doi, e)
+        return _error(f"Failed to fetch PDF: {e}", 502)
 
-    return StreamingResponse(_stream(), media_type="application/pdf")
+    if resp.status_code != 200:
+        await client.aclose()
+        return _error(f"Upstream returned {resp.status_code}", 502)
+    if len(resp.content) > MAX_PDF_BYTES:
+        await client.aclose()
+        return _error("PDF too large", 413)
+    if not resp.content.startswith(b"%PDF"):
+        await client.aclose()
+        return _error("Upstream did not return a valid PDF", 502)
+
+    await client.aclose()
+    return Response(resp.content, media_type="application/pdf")
 
 
 async def status_endpoint(request: Request) -> Response:

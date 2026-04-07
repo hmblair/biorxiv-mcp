@@ -69,4 +69,5 @@ def save(url: str, api_key: str | None = None) -> Path:
     if api_key:
         lines.append(f'api_key = "{api_key}"')
     p.write_text("\n".join(lines) + "\n")
+    p.chmod(0o600)
     return p

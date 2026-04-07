@@ -153,12 +153,12 @@ async def auto_sync(conn) -> dict:
     return {"kind": "bulk", "count": count}
 
 
-def resolve_paper(conn, doi: str) -> dict | None:
+async def resolve_paper(conn, doi: str) -> dict | None:
     """Look up a paper locally, falling back to the bioRxiv API."""
     paper = db.get_paper(conn, doi)
     if paper:
         return paper
-    api_paper = fetch_paper_by_doi(doi)
+    api_paper = await asyncio.to_thread(fetch_paper_by_doi, doi)
     if api_paper:
         api_paper["_source"] = "api"
     return api_paper

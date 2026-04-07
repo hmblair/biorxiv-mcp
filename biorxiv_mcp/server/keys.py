@@ -67,13 +67,21 @@ def list_keys(conn: sqlite3.Connection) -> list[ApiKey]:
 
 
 def delete(conn: sqlite3.Connection, key_id: str) -> ApiKey | None:
-    """Delete a key by its key_id prefix. Returns the key if found."""
-    row = conn.execute(
+    """Delete a key by its key_id prefix. Returns the key if found.
+
+    Raises ValueError if the prefix matches multiple keys.
+    """
+    rows = conn.execute(
         "SELECT hash, label, unlimited, created_at FROM api_keys WHERE hash LIKE ?",
         (key_id + "%",),
-    ).fetchone()
-    if row is None:
+    ).fetchall()
+    if not rows:
         return None
+    if len(rows) > 1:
+        raise ValueError(
+            f"Prefix '{key_id}' matches {len(rows)} keys. Use a longer prefix."
+        )
+    row = rows[0]
     conn.execute("DELETE FROM api_keys WHERE hash = ?", (row[0],))
     conn.commit()
     return ApiKey(hash=row[0], label=row[1], unlimited=bool(row[2]), created_at=row[3])
