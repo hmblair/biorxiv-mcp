@@ -10,10 +10,12 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from collections.abc import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp
 
 from . import db
 from .keys import ApiKey, hash_token, load_active
@@ -30,7 +32,7 @@ _KEY_BURST = int(os.environ.get("BIORXIV_MCP_KEY_BURST", "60"))
 class BearerAuth(BaseHTTPMiddleware):
     """Validate ``Authorization: Bearer <token>`` against the api_keys table."""
 
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
         self._buckets: dict[str, TokenBucket] = {}
         self._lock = threading.Lock()
@@ -47,7 +49,7 @@ class BearerAuth(BaseHTTPMiddleware):
                 self._buckets[identity] = b
             return b
 
-    def _rate_limit(self, identity: str, rate: float, burst: int):
+    def _rate_limit(self, identity: str, rate: float, burst: int) -> Response | None:
         wait = self._bucket(identity, rate, burst).consume()
         if wait is None:
             return None
@@ -59,7 +61,9 @@ class BearerAuth(BaseHTTPMiddleware):
             headers={"Retry-After": str(retry_after)},
         )
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         if request.url.path in _UNAUTHED_PATHS:
             return await call_next(request)
 
