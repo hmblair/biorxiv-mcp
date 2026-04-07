@@ -78,9 +78,7 @@ def delete(conn: sqlite3.Connection, key_id: str) -> ApiKey | None:
     if not rows:
         return None
     if len(rows) > 1:
-        raise ValueError(
-            f"Prefix '{key_id}' matches {len(rows)} keys. Use a longer prefix."
-        )
+        raise ValueError(f"Prefix '{key_id}' matches {len(rows)} keys. Use a longer prefix.")
     row = rows[0]
     conn.execute("DELETE FROM api_keys WHERE hash = ?", (row[0],))
     conn.commit()

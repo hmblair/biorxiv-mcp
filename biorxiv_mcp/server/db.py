@@ -184,9 +184,7 @@ SCHEMA_VERSION = 1
 
 
 def _get_schema_version(conn: sqlite3.Connection) -> int:
-    row = conn.execute(
-        "SELECT value FROM sync_meta WHERE key = 'schema_version'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM sync_meta WHERE key = 'schema_version'").fetchone()
     return int(row[0]) if row else 0
 
 
