@@ -72,6 +72,13 @@ def _error(msg: str, status: int = 400) -> JSONResponse:
     return JSONResponse({"error": msg}, status_code=status)
 
 
+def _category(raw: str | None) -> str | list[str] | None:
+    if not raw:
+        return None
+    parts = [c.strip() for c in raw.split(",") if c.strip()]
+    return parts if len(parts) > 1 else parts[0] if parts else None
+
+
 # -- Background sync ----------------------------------------------------------
 
 _sync_task: asyncio.Task | None = None
@@ -125,11 +132,7 @@ async def search(request: Request) -> Response:
         before = _date(q.get("before"), "before")
         detail = _bool(q.get("detail"))
         sort = q.get("sort", "relevance")
-        raw_cat = q.get("category") or None
-        category: str | list[str] | None = None
-        if raw_cat:
-            parts = [c.strip() for c in raw_cat.split(",") if c.strip()]
-            category = parts if len(parts) > 1 else parts[0] if parts else None
+        category = _category(q.get("category"))
     except ValueError as e:
         return _error(str(e))
 
@@ -156,11 +159,7 @@ async def search_count(request: Request) -> Response:
     try:
         after = _date(q.get("after"), "after")
         before = _date(q.get("before"), "before")
-        raw_cat = q.get("category") or None
-        category: str | list[str] | None = None
-        if raw_cat:
-            parts = [c.strip() for c in raw_cat.split(",") if c.strip()]
-            category = parts if len(parts) > 1 else parts[0] if parts else None
+        category = _category(q.get("category"))
     except ValueError as e:
         return _error(str(e))
     try:
@@ -216,23 +215,19 @@ async def download_pdf(request: Request) -> Response:
     url = sync.pdf_url(doi, paper.get("server") or sync.DEFAULT_SERVER, paper.get("version") or 1)
 
     try:
-        client = httpx.AsyncClient(follow_redirects=True, timeout=60.0)
-        resp = await client.get(url)
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+            resp = await client.get(url)
     except httpx.HTTPError as e:
         logger.error("PDF fetch failed for %s: %s", doi, e)
         return _error(f"Failed to fetch PDF: {e}", 502)
 
     if resp.status_code != 200:
-        await client.aclose()
         return _error(f"Upstream returned {resp.status_code}", 502)
     if len(resp.content) > MAX_PDF_BYTES:
-        await client.aclose()
         return _error("PDF too large", 413)
     if not resp.content.startswith(b"%PDF"):
-        await client.aclose()
         return _error("Upstream did not return a valid PDF", 502)
 
-    await client.aclose()
     return Response(resp.content, media_type="application/pdf")
 
 

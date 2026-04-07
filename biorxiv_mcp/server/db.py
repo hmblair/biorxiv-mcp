@@ -41,6 +41,7 @@ _FTS_COLS = ", ".join(FTS_FIELDS)
 _FTS_NEW = ", ".join(f"new.{f}" for f in FTS_FIELDS)
 _FTS_OLD = ", ".join(f"old.{f}" for f in FTS_FIELDS)
 
+
 def _normalize_category(cat: str | None) -> str:
     """Normalize category to lowercase with stripped whitespace."""
     return (cat or "").strip().lower()
