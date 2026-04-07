@@ -9,19 +9,32 @@ SERVICE := biorxiv-mcp
 BIORXIV_API_URL ?= $(if $(BIORXIV_MCP_ENDPOINT),$(BIORXIV_MCP_ENDPOINT),http://localhost:8000)
 BIORXIV_API_KEY ?= $(BIORXIV_MCP_ENDPOINT_KEY)
 
-.PHONY: install uninstall install-service uninstall-service start stop restart status test test-endpoint
+.PHONY: install uninstall install-agents uninstall-agents install-service uninstall-service start stop restart status test test-endpoint
 
 # Register the stdio MCP shim with Claude Code, Claude Desktop, and OpenCode.
 # Local:   make install
 # Remote:  BIORXIV_MCP_ENDPOINT=https://biorxiv.example.com \
 #          BIORXIV_MCP_ENDPOINT_KEY=<token> make install
-install: $(VENV)
+install: $(VENV) install-agents
 	python3 $(DEPLOY)/install_mcp.py install \
 	    --url "$(BIORXIV_API_URL)" \
 	    $(if $(BIORXIV_API_KEY),--key "$(BIORXIV_API_KEY)",)
 
 uninstall:
 	python3 $(DEPLOY)/install_mcp.py uninstall
+
+CLAUDE_AGENTS_DIR := $(HOME)/.claude/agents
+
+install-agents:
+	mkdir -p $(CLAUDE_AGENTS_DIR)
+	cp $(CURDIR)/agents/*.md $(CLAUDE_AGENTS_DIR)/
+	@echo "Installed agents to $(CLAUDE_AGENTS_DIR)"
+
+uninstall-agents:
+	@for f in $(CURDIR)/agents/*.md; do \
+		rm -f $(CLAUDE_AGENTS_DIR)/$$(basename $$f); \
+	done
+	@echo "Removed agents from $(CLAUDE_AGENTS_DIR)"
 
 # Server-side: install systemd units (needs sudo).
 install-service: $(VENV)
