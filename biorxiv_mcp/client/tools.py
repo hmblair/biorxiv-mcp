@@ -59,15 +59,15 @@ def _api_call(fn):
 @mcp.tool()
 @_api_call
 def search_biorxiv(
-    query: str,
+    query: str = "",
     limit: int = 10,
-    category: str | None = None,
+    category: str | list[str] | None = None,
     after: str | None = None,
     before: str | None = None,
     detail: bool = False,
     sort: str = "relevance",
 ) -> list[dict] | dict:
-    """Search bioRxiv/medRxiv papers by keyword.
+    """Search bioRxiv/medRxiv papers by keyword, or browse by date/category.
 
     Searches titles, abstracts, authors, and institutions. Works like
     PubMed: all keywords must match (implicit AND), and each keyword is
@@ -77,6 +77,11 @@ def search_biorxiv(
     Returns compact results (doi, title, authors, date, category) by
     default. Set detail=True to include abstract, institution, license,
     and other fields.
+
+    Browsing mode:
+        Omit query to list papers by date/category without keyword
+        matching. Useful for scanning recent preprints in a time window.
+        Results are sorted by date (newest first) when no query is given.
 
     Query syntax:
         - Multiple words: "CRISPR cancer" (implicit AND — both required)
@@ -95,14 +100,17 @@ def search_biorxiv(
         - Combine with category/date filters to narrow further
 
     Args:
-        query: Search keywords or FTS5 query expression
-        limit: Max results to return (default 10, capped at 100)
-        category: Filter by category (e.g. "neuroscience", "genomics").
+        query: Search keywords or FTS5 query expression (optional —
+            omit to browse by date/category)
+        limit: Max results to return (default 10)
+        category: Filter by category — a single string (e.g. "neuroscience")
+            or a list of strings (e.g. ["bioinformatics", "biophysics"]).
             Use biorxiv_categories() to list available categories.
         after: Only papers on or after this date (YYYY-MM-DD)
         before: Only papers on or before this date (YYYY-MM-DD)
         detail: If True, return all fields including abstract (default False)
-        sort: "relevance" (default) or "date" (newest first)
+        sort: "relevance" (default) or "date" (newest first).
+            Automatically uses "date" when no query is given.
     """
     api = _api()
     results = api.search(
@@ -119,7 +127,8 @@ def search_biorxiv(
         count = status.get("paper_count", 0)
         if count == 0:
             return {"message": "Database is empty. Run sync_biorxiv() first to populate it."}
-        return {"message": f"No results for '{query}' (searched {count} papers)."}
+        desc = f"for '{query}'" if query.strip() else "matching those filters"
+        return {"message": f"No results {desc} (searched {count} papers)."}
     return results
 
 

@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # -- Policy -------------------------------------------------------------------
 
-MAX_SEARCH_LIMIT = 100
+MAX_SEARCH_LIMIT = 100_000
 MAX_PDF_BYTES = 100 * 1024 * 1024  # 100 MB
 _DOI_RE = re.compile(r"^10\.\d{4,9}/[A-Za-z0-9._\-;()/:]+$")
 _CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
@@ -125,7 +125,11 @@ async def search(request: Request) -> Response:
         before = _date(q.get("before"), "before")
         detail = _bool(q.get("detail"))
         sort = q.get("sort", "relevance")
-        category = q.get("category") or None
+        raw_cat = q.get("category") or None
+        category: str | list[str] | None = None
+        if raw_cat:
+            parts = [c.strip() for c in raw_cat.split(",") if c.strip()]
+            category = parts if len(parts) > 1 else parts[0] if parts else None
     except ValueError as e:
         return _error(str(e))
 
@@ -152,6 +156,11 @@ async def search_count(request: Request) -> Response:
     try:
         after = _date(q.get("after"), "after")
         before = _date(q.get("before"), "before")
+        raw_cat = q.get("category") or None
+        category: str | list[str] | None = None
+        if raw_cat:
+            parts = [c.strip() for c in raw_cat.split(",") if c.strip()]
+            category = parts if len(parts) > 1 else parts[0] if parts else None
     except ValueError as e:
         return _error(str(e))
     try:
@@ -159,7 +168,7 @@ async def search_count(request: Request) -> Response:
             n = db.search_count(
                 conn,
                 q.get("q", ""),
-                category=q.get("category") or None,
+                category=category,
                 after=after,
                 before=before,
             )

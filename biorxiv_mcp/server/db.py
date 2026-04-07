@@ -41,6 +41,29 @@ _FTS_COLS = ", ".join(FTS_FIELDS)
 _FTS_NEW = ", ".join(f"new.{f}" for f in FTS_FIELDS)
 _FTS_OLD = ", ".join(f"old.{f}" for f in FTS_FIELDS)
 
+def _normalize_category(cat: str | None) -> str:
+    """Normalize category to lowercase with stripped whitespace."""
+    return (cat or "").strip().lower()
+
+
+def _paper_dict(row: sqlite3.Row) -> dict:
+    """Convert a Row to a dict with normalized category."""
+    d = dict(row)
+    if "category" in d:
+        d["category"] = _normalize_category(d["category"])
+    return d
+
+
+def _compact_authors(authors: str | None) -> str:
+    """Truncate to first and last author."""
+    if not authors:
+        return ""
+    parts = [a.strip() for a in authors.split(";") if a.strip()]
+    if len(parts) <= 2:
+        return "; ".join(parts)
+    return f"{parts[0]}; ... ; {parts[-1]}"
+
+
 _writer_lock = threading.Lock()
 _thread_local = threading.local()
 # sqlite3.Connection disallows arbitrary attrs, so track init state by id.
@@ -172,6 +195,8 @@ def upsert_papers(conn: sqlite3.Connection, papers: list[dict]) -> int:
         if existing is None or _version(p) > _version(existing):
             by_doi[p["doi"]] = p
     papers = list(by_doi.values())
+    for p in papers:
+        p["category"] = _normalize_category(p.get("category"))
     dois = [(p["doi"],) for p in papers]
     with _writer_lock:
         conn.executemany("DELETE FROM papers WHERE doi = ?", dois)
@@ -288,47 +313,69 @@ def _build_match_clauses(query: str) -> list[str]:
     return clauses
 
 
-def _search_where(query: str, category: str | None, after: str | None, before: str | None):
+def _search_where(
+    query: str,
+    category: str | list[str] | None,
+    after: str | None,
+    before: str | None,
+):
     """Build the WHERE clause and params for search queries.
 
     Each search term becomes a separate ``papers_fts MATCH ?`` clause
     joined by AND. Within each clause, the term and its MeSH synonyms
     are OR-joined.
+
+    When *query* is empty, the MATCH clause is omitted and results are
+    filtered only by category/date.
     """
-    clauses = _build_match_clauses(query)
-    match_parts = []
+    parts: list[str] = []
     params: list = []
-    for clause in clauses:
-        match_parts.append("papers_fts MATCH ?")
-        params.append(clause)
-    where = " AND ".join(match_parts)
+    if query.strip():
+        clauses = _build_match_clauses(query)
+        for clause in clauses:
+            parts.append("papers_fts MATCH ?")
+            params.append(clause)
     if category:
-        where += " AND p.category = ?"
-        params.append(category)
+        if isinstance(category, list):
+            placeholders = ", ".join("?" for _ in category)
+            parts.append(f"LOWER(TRIM(p.category)) IN ({placeholders})")
+            params.extend(_normalize_category(c) for c in category)
+        else:
+            parts.append("LOWER(TRIM(p.category)) = ?")
+            params.append(_normalize_category(category))
     if after:
-        where += " AND p.date >= ?"
+        parts.append("p.date >= ?")
         params.append(after)
     if before:
-        where += " AND p.date <= ?"
+        parts.append("p.date <= ?")
         params.append(before)
+    where = " AND ".join(parts) if parts else "1"
     return where, params
 
 
 def search_count(
     conn: sqlite3.Connection,
     query: str,
-    category: str | None = None,
+    category: str | list[str] | None = None,
     after: str | None = None,
     before: str | None = None,
 ) -> int:
     """Return the number of papers matching a query."""
+    has_query = bool(query.strip())
     where, params = _search_where(query, category, after, before)
-    sql = f"""
-        SELECT COUNT(*)
-        FROM papers_fts
-        JOIN papers p ON p.rowid = papers_fts.rowid
-        WHERE {where}
-    """
+    if has_query:
+        sql = f"""
+            SELECT COUNT(*)
+            FROM papers_fts
+            JOIN papers p ON p.rowid = papers_fts.rowid
+            WHERE {where}
+        """
+    else:
+        sql = f"""
+            SELECT COUNT(*)
+            FROM papers p
+            WHERE {where}
+        """
     return conn.execute(sql, params).fetchone()[0]
 
 
@@ -339,26 +386,45 @@ def search(
     conn: sqlite3.Connection,
     query: str,
     limit: int = 10,
-    category: str | None = None,
+    category: str | list[str] | None = None,
     after: str | None = None,
     before: str | None = None,
     detail: bool = False,
     sort: str = "relevance",
 ) -> list[dict]:
-    """FTS5 search with optional filters."""
+    """FTS5 search with optional filters.
+
+    When *query* is empty, returns papers filtered only by category/date
+    (no full-text matching). Sort defaults to date in that case since
+    relevance ranking requires an FTS MATCH.
+    """
+    has_query = bool(query.strip())
     where, params = _search_where(query, category, after, before)
     columns = "p.*" if detail else _COMPACT_COLS
-    order = "rank" if sort == "relevance" else "p.date DESC"
-    sql = f"""
-        SELECT {columns}
-        FROM papers_fts
-        JOIN papers p ON p.rowid = papers_fts.rowid
-        WHERE {where}
-        ORDER BY {order} LIMIT ?
-    """
+    order = "rank" if sort == "relevance" and has_query else "p.date DESC"
+    if has_query:
+        sql = f"""
+            SELECT {columns}
+            FROM papers_fts
+            JOIN papers p ON p.rowid = papers_fts.rowid
+            WHERE {where}
+            ORDER BY {order} LIMIT ?
+        """
+    else:
+        sql = f"""
+            SELECT {columns}
+            FROM papers p
+            WHERE {where}
+            ORDER BY {order} LIMIT ?
+        """
     params.append(limit)
     rows = conn.execute(sql, params).fetchall()
-    return [dict(r) for r in rows]
+    results = [_paper_dict(r) for r in rows]
+    if not detail:
+        for r in results:
+            if "authors" in r:
+                r["authors"] = _compact_authors(r["authors"])
+    return results
 
 
 # -- Single-paper lookup -----------------------------------------------------
@@ -367,7 +433,7 @@ def search(
 def get_paper(conn: sqlite3.Connection, doi: str) -> dict | None:
     """Get a paper by DOI."""
     row = conn.execute("SELECT * FROM papers WHERE doi = ?", (doi,)).fetchone()
-    return dict(row) if row else None
+    return _paper_dict(row) if row else None
 
 
 # -- Metadata ----------------------------------------------------------------
@@ -376,7 +442,8 @@ def get_paper(conn: sqlite3.Connection, doi: str) -> dict | None:
 def get_categories(conn: sqlite3.Connection) -> list[dict]:
     """Return all categories with paper counts, sorted by count descending."""
     rows = conn.execute(
-        "SELECT category, COUNT(*) as count FROM papers GROUP BY category ORDER BY count DESC"
+        "SELECT LOWER(TRIM(category)) as category, COUNT(*) as count"
+        " FROM papers GROUP BY LOWER(TRIM(category)) ORDER BY count DESC"
     ).fetchall()
     return [dict(r) for r in rows]
 

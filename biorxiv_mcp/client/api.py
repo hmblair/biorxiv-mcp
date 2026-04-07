@@ -68,19 +68,20 @@ class BiorxivApi:
 
     def search(
         self,
-        query: str,
+        query: str = "",
         limit: int = 10,
-        category: str | None = None,
+        category: str | list[str] | None = None,
         after: str | None = None,
         before: str | None = None,
         detail: bool = False,
         sort: str = "relevance",
     ) -> list[dict]:
+        cat = ",".join(category) if isinstance(category, list) else category
         return self._get(
             "/api/search",
             q=query,
             limit=str(limit),
-            category=category,
+            category=cat,
             after=after,
             before=before,
             detail="true" if detail else None,
