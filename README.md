@@ -21,7 +21,8 @@ make install \
   BIORXIV_MCP_ENDPOINT_KEY=<your-api-key>
 ```
 
-This registers the MCP with Claude Code, Claude Desktop, and OpenCode.
+This registers the MCP with Claude Code, Claude Desktop, and OpenCode,
+and installs a Claude Code [agent](#agent) for literature search.
 No server, database, or background process runs on your machine — just
 a lightweight shim that forwards tool calls to the remote API.
 
@@ -43,7 +44,7 @@ Once installed, your agent has access to these tools:
 
 | Tool | What it does |
 |---|---|
-| `search_biorxiv` | Full-text search across titles, abstracts, authors, and institutions. PubMed-like: implicit AND, MeSH synonym expansion, quoted phrases, hyphenated terms, category and date filters. |
+| `search_biorxiv` | Full-text search across titles, abstracts, authors, and institutions. PubMed-like: implicit AND, MeSH synonym expansion, quoted phrases, hyphenated terms. Filter by category (or list of categories), date range. Omit the query to browse by date/category. |
 | `biorxiv_categories` | List all categories with paper counts. |
 | `get_paper` | Get full metadata for a paper by DOI (title, authors, abstract, institution, license, etc.). |
 | `download_paper` | Download a paper's PDF to `~/.local/share/biorxiv-mcp/papers/`. |
@@ -54,6 +55,7 @@ Once installed, your agent has access to these tools:
 - `search_biorxiv("heart attack")` — also finds "myocardial infarction" via MeSH
 - `search_biorxiv("mRNA-seq", category="genomics", after="2024-01-01")`
 - `search_biorxiv("CRISPR OR cancer")` — explicit OR for either term
+- `search_biorxiv(category=["bioinformatics", "biophysics"], after="2025-04-01")` — browse recent papers
 - `get_paper("10.1101/2024.01.05.574328")`
 
 ## Agent
