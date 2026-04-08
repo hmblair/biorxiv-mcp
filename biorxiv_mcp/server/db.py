@@ -416,7 +416,7 @@ _COMPACT_COLS = "p.doi, p.title, p.authors, p.date, p.category, p.server"
 def search(
     conn: sqlite3.Connection,
     query: str,
-    limit: int = 10,
+    limit: int = 50,
     category: str | list[str] | None = None,
     after: str | None = None,
     before: str | None = None,

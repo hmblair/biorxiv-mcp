@@ -69,7 +69,7 @@ class BiorxivApi:
     def search(
         self,
         query: str = "",
-        limit: int = 10,
+        limit: int = 50,
         category: str | list[str] | None = None,
         after: str | None = None,
         before: str | None = None,

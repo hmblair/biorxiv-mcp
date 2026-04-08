@@ -127,7 +127,7 @@ async def search(request: Request) -> Response:
     q = request.query_params
     try:
         query = q.get("q", "")
-        limit = _int(q.get("limit"), "limit", default=10, lo=1, hi=MAX_SEARCH_LIMIT)
+        limit = _int(q.get("limit"), "limit", default=50, lo=1, hi=MAX_SEARCH_LIMIT)
         after = _date(q.get("after"), "after")
         before = _date(q.get("before"), "before")
         detail = _bool(q.get("detail"))

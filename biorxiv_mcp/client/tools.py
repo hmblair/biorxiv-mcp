@@ -60,7 +60,7 @@ def _api_call(fn):
 @_api_call
 def search_biorxiv(
     query: str = "",
-    limit: int = 10,
+    limit: int = 50,
     category: str | list[str] | None = None,
     after: str | None = None,
     before: str | None = None,
@@ -102,7 +102,7 @@ def search_biorxiv(
     Args:
         query: Search keywords or FTS5 query expression (optional —
             omit to browse by date/category)
-        limit: Max results to return (default 10)
+        limit: Max results to return (default 50)
         category: Filter by category — a single string (e.g. "neuroscience")
             or a list of strings (e.g. ["bioinformatics", "biophysics"]).
             Use biorxiv_categories() to list available categories.
