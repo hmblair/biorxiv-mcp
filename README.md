@@ -3,11 +3,13 @@
 Search [bioRxiv](https://www.biorxiv.org) and
 [medRxiv](https://www.medrxiv.org) preprints from your AI agent.
 
-A local [MCP](https://modelcontextprotocol.io) server gives Claude
-(and other MCP-compatible agents) full-text search across ~400k papers,
-paper lookup by DOI, PDF downloads, and category browsing — all backed
-by a remote index so queries are fast and don't hit the bioRxiv API
-directly.
+The official bioRxiv API has no keyword search — it can only list papers
+by date range or category. This project syncs the full catalog into a
+local SQLite FTS5 index and exposes it as an
+[MCP](https://modelcontextprotocol.io) server, giving Claude (and other
+MCP-compatible agents) fast full-text search with relevance ranking,
+MeSH synonym expansion, paper lookup by DOI, PDF downloads, and
+category browsing.
 
 ## Install
 
